@@ -1,17 +1,22 @@
 from CommandBase import *
 import json
+from MythicResponseRPC import *
 
 
 class CatArguments(TaskArguments):
     def __init__(self, command_line):
         super().__init__(command_line)
         self.args = {
-            "path": CommandParameter(name="path", type=ParameterType.String, description="path to file (no quotes required)")
+            "path": CommandParameter(
+                name="path",
+                type=ParameterType.String,
+                description="path to file (no quotes required)",
+            )
         }
 
     async def parse_arguments(self):
         if len(self.command_line) > 0:
-            if self.command_line[0] == '{':
+            if self.command_line[0] == "{":
                 self.load_args_from_json_string(self.command_line)
             else:
                 self.add_arg("path", self.command_line)
@@ -36,6 +41,10 @@ class CatCommand(CommandBase):
     attackmapping = ["T1081", "T1106"]
 
     async def create_tasking(self, task: MythicTask) -> MythicTask:
+        resp = await MythicResponseRPC(task).register_artifact(
+            artifact_instance="$.NSString.stringWithContentsOfFileEncodingError",
+            artifact_type="API Called",
+        )
         return task
 
     async def process_response(self, response: AgentResponse):

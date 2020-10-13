@@ -1,17 +1,22 @@
 from CommandBase import *
 import json
+from MythicResponseRPC import *
 
 
 class LaunchAppArguments(TaskArguments):
     def __init__(self, command_line):
         super().__init__(command_line)
         self.args = {
-            "bundle": CommandParameter(name="bundle", type=ParameterType.String, description="The Bundle name to launch")
+            "bundle": CommandParameter(
+                name="bundle",
+                type=ParameterType.String,
+                description="The Bundle name to launch",
+            )
         }
 
     async def parse_arguments(self):
         if len(self.command_line) > 0:
-            if self.command_line[0] == '{':
+            if self.command_line[0] == "{":
                 self.load_args_from_json_string(self.command_line)
             else:
                 self.add_arg("bundle", self.command_line)
@@ -37,6 +42,12 @@ class LaunchAppCommand(CommandBase):
     argument_class = LaunchAppArguments
 
     async def create_tasking(self, task: MythicTask) -> MythicTask:
+        resp = await MythicResponseRPC(task).register_artifact(
+            artifact_instance="xpcproxy {}".format(
+                task.args.get_arg("bundle"),
+            ),
+            artifact_type="Process Create",
+        )
         return task
 
     async def process_response(self, response: AgentResponse):

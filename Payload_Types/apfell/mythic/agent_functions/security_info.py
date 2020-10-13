@@ -1,5 +1,6 @@
 from CommandBase import *
 import json
+from MythicResponseRPC import *
 
 
 class SecurityInfoArguments(TaskArguments):
@@ -14,8 +15,8 @@ class SecurityInfoArguments(TaskArguments):
 class SecurityInfoCommand(CommandBase):
     cmd = "security_info"
     needs_admin = False
-    help_cmd = 'security_info'
-    description = "This uses JXA to list some security information about the system by contacting the \"System Events\" application via Apple Events. This can cause a popup or be denied in Mojave and later"
+    help_cmd = "security_info"
+    description = 'This uses JXA to list some security information about the system by contacting the "System Events" application via Apple Events. This can cause a popup or be denied in Mojave and later'
     version = 1
     is_exit = False
     is_file_browse = False
@@ -28,6 +29,10 @@ class SecurityInfoCommand(CommandBase):
     argument_class = SecurityInfoArguments
 
     async def create_tasking(self, task: MythicTask) -> MythicTask:
+        resp = await MythicResponseRPC(task).register_artifact(
+            artifact_instance="Target Application of System Events",
+            artifact_type="AppleEvent Sent",
+        )
         return task
 
     async def process_response(self, response: AgentResponse):

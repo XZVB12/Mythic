@@ -23,13 +23,12 @@
                 <th onclick="sort_table(this)" class="sticky-top" style="width:5rem"><b>Task </b></th>
                 <th onclick="sort_table(this)" class="sticky-top" style="text-align:left"><b>Host </b></th>
                 <th onclick="sort_table(this)" class="sticky-top" style="text-align:left"><b>Command </b></th>
-                <th onclick="sort_table(this)" class="sticky-top" style="text-align:left"><b>Parameters </b></th>
                 <th onclick="sort_table(this)" class="sticky-top" style="text-align:left"><b>Artifact </b></th>
             </tr>
         <!-- Repeat this for each base artifact -->
             <tr v-for="(artifact, i) in artifacts" :key="artifact.id">
                 <td style="text-align:center">
-                    <button type="button" class="btn btn{{config['outline-buttons']}}danger btn-sm" @click="delete_button(artifact, i)"><i class="fas fa-trash-alt"></i></button>
+                    <button type="button" class="btn btn{{config['outline-buttons']}}danger btn-sm" @click="delete_button(artifact)"><i class="fas fa-trash-alt"></i></button>
                 </td>
                 <td style="text-align:center">[[toLocalTime(artifact.timestamp)]]</td>
                 <td>
@@ -39,7 +38,6 @@
                 </td>
                 <td>[[ artifact.host ]]</td>
                 <td>[[ artifact.command ]]</td>
-                <td>[[ artifact.task.substring(0,500) ]]</td>
                 <td>[[artifact.artifact_template]]: [[ artifact.artifact_instance.substring(0,500) ]]</td>
             </tr>
         <!-- End of the repeating -->

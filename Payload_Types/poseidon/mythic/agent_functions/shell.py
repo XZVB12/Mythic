@@ -1,12 +1,12 @@
 from CommandBase import *
 import json
+from MythicResponseRPC import *
 
 
 class ShellArguments(TaskArguments):
     def __init__(self, command_line):
         super().__init__(command_line)
-        self.args = {
-        }
+        self.args = {}
 
     async def parse_arguments(self):
         pass
@@ -29,6 +29,14 @@ class ShellCommand(CommandBase):
     attackmapping = ["T1059"]
 
     async def create_tasking(self, task: MythicTask) -> MythicTask:
+        resp = await MythicResponseRPC(task).register_artifact(
+            artifact_instance="/bin/bash -c {}".format(task.args.command_line),
+            artifact_type="Process Create",
+        )
+        resp = await MythicResponseRPC(task).register_artifact(
+            artifact_instance="{}".format(task.args.command_line),
+            artifact_type="Process Create",
+        )
         return task
 
     async def process_response(self, response: AgentResponse):
