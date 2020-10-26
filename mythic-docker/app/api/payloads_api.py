@@ -20,6 +20,7 @@ import ujson as js
 from datetime import datetime, timedelta
 from sanic.exceptions import abort
 from app.api.rabbitmq_api import send_c2_rabbitmq_message
+from app.api.operation_api import send_all_operations_message
 
 
 @mythic.route(mythic.config["API_BASE"] + "/payloads/", methods=["GET"])
@@ -319,6 +320,7 @@ async def register_new_payload_func(data, user):
                     await send_c2_rabbitmq_message(
                         c2_profile.name, "start", "", user["username"]
                     )
+                    await send_all_operations_message(message=f"Starting {c2_profile.name} C2 Profile", level="info")
             except Exception as e:
                 print(str(sys.exc_info()[-1].tb_lineno) + " " + str(e))
                 return {
@@ -355,7 +357,7 @@ async def register_new_payload_func(data, user):
                                 p["c2_profile_parameters"][param.name] = (datetime.utcnow() + timedelta(days=1)).strftime("%Y-%m-%d")
                             else:
                                 p["c2_profile_parameters"][param.name] = (
-                                            datetime.utcnow() + timedelta(days=param.default_value)
+                                            datetime.utcnow() + timedelta(days=int(param.default_value))
                                 ).strftime("%Y-%m-%d")
                         elif param.parameter_type == "Dictionary":
                             # default for a dictionary type is to just display all those that have "default_show" to true
