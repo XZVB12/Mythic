@@ -17,7 +17,7 @@
                         </span>
                     </th>
                     <th style="width:3rem">Delete</th>
-                    <th onclick="sort_table(this)" style="width:12rem">Time</th>
+                    <th onclick="sort_table(this, 'date')" style="width:12rem">Time</th>
                     <th onclick="sort_table(this)" style="width:6rem;text-align:left">Task</th>
                     <th onclick="sort_table(this)" style="width:16rem">Host</th>
                     <th onclick="sort_table(this)" style="width:8rem">Operator</th>
@@ -76,14 +76,14 @@
     </div><br>
     <div style="overflow-y:auto;  max-height:calc(45vh)" class="card bg-card-body border border-dark shadow">
         <div class="card-header bg-header border border-dark shadow" >
-            <span style="display:inline-block" class="display"><h2>Uploads</h2></span>
+            <h2 style="display:inline-block"><span class="display">Uploads</span> to disk</h2>
             <button style="float:right;margin:5px" class="btn btn-md btn{{config['outline-buttons']}}info" @click="export_file_metadata('uploads')"><i class="fas fa-file-export"></i> Export Metadata</button>
         </div>
         <div class="card-body bg-card-body border border-dark shadow" style="padding:0">
             <table class="table table-striped {{config['table-color']}} border border-dark shadow" style="margin-bottom:0">
                 <tr>
                     <th style="width:2rem">Delete</th>
-                    <th onclick="sort_table(this)" style="width:12rem">Time</th>
+                    <th onclick="sort_table(this, 'date')" style="width:12rem">Time</th>
                     <th onclick="sort_table(this)" style="width:6rem">Task</th>
                     <th onclick="sort_table(this)" style="width:16rem">Host</th>
                     <th onclick="sort_table(this)" style="width:8rem">Operator</th>

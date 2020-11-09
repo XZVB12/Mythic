@@ -35,9 +35,15 @@ async def rabbit_c2_callback(message: aio_pika.IncomingMessage):
                 )
             from app.api.c2profiles_api import import_c2_profile_func
 
-            status = await import_c2_profile_func(
-                json.loads(message.body.decode()), operator
-            )
+            try:
+                status = await import_c2_profile_func(
+                    json.loads(message.body.decode()), operator
+                )
+            except Exception as e:
+                await send_all_operations_message("Failed Sync-ed database with {} C2 files: {}".format(
+                    pieces[2], str(e)
+                ), "warning")
+                return
             operation_query = await db_model.operation_query()
             operations = await db_objects.execute(
                 operation_query.where(db_model.Operation.complete == False)
@@ -48,17 +54,18 @@ async def rabbit_c2_callback(message: aio_pika.IncomingMessage):
                             pieces[2]
                         ), "info")
                 # for a successful checkin, we need to find all non-wrapper payload types and get them to re-check in
-                query = await db_model.payloadtype_query()
-                pts = await db_objects.execute(
-                    query.where(db_model.PayloadType.wrapper == False)
-                )
-                sync_operator = "" if operator is None else operator.username
-                for pt in pts:
-                    if pt.ptype not in sync_tasks:
-                        sync_tasks[pt.ptype] = True
-                        await send_pt_rabbitmq_message(
-                            pt.ptype, "sync_classes", "", sync_operator
-                        )
+                if status["new"]:
+                    query = await db_model.payloadtype_query()
+                    pts = await db_objects.execute(
+                        query.where(db_model.PayloadType.wrapper == False)
+                    )
+                    sync_operator = "" if operator is None else operator.username
+                    for pt in pts:
+                        if pt.ptype not in sync_tasks:
+                            sync_tasks[pt.ptype] = True
+                            await send_pt_rabbitmq_message(
+                                pt.ptype, "sync_classes", "", sync_operator
+                            )
             else:
                 sync_tasks.pop(pieces[2], None)
                 await send_all_operations_message("Failed Sync-ed database with {} C2 files: {}".format(
@@ -202,12 +209,11 @@ async def rabbit_pt_callback(message: aio_pika.IncomingMessage):
                                 await send_all_operations_message("Successfully Sync-ed database with {} payload files".format(
                                             pieces[2]
                                         ), "info")
-                                # for a successful checkin, we need to find all wrapper payload types and get them to re-check in
-                                if status["wrapper"] is False:
+                                if status["wrapper"] and status["new"]:
                                     query = await db_model.payloadtype_query()
                                     pts = await db_objects.execute(
                                         query.where(
-                                            db_model.PayloadType.wrapper == True
+                                            db_model.PayloadType.wrapper == False
                                         )
                                     )
                                     sync_operator = (
@@ -216,6 +222,7 @@ async def rabbit_pt_callback(message: aio_pika.IncomingMessage):
                                     for pt in pts:
                                         if pt.ptype not in sync_tasks:
                                             sync_tasks[pt.ptype] = True
+                                            print("got sync from {}, sending sync to {}".format(pieces[2], pt.ptype))
                                             await send_pt_rabbitmq_message(
                                                 pt.ptype, "sync_classes", "", sync_operator
                                             )
@@ -267,6 +274,10 @@ async def rabbit_pt_rpc_callback(
                 response = await task_update_callback(request)
             elif request["action"] == "register_artifact":
                 response = await register_artifact(request)
+            elif request["action"] == "build_payload_from_parameters":
+                response = await build_payload_from_parameters(request)
+            elif request["action"] == "register_payload_on_host":
+                response = await register_payload_on_host(request)
             else:
                 response = {"status": "error", "error": "unknown action"}
             response = json.dumps(response).encode()
@@ -320,12 +331,14 @@ async def register_file(request):
         code = base64.b64decode(request["file"])
         code_file.write(code)
         code_file.close()
+        size = os.stat(path).st_size
         md5 = await hash_MD5(code)
         sha1 = await hash_SHA1(code)
         new_file_meta = await db_objects.create(
             db_model.FileMeta,
             total_chunks=1,
             chunks_received=1,
+            chunk_size=size,
             complete=True,
             path=str(path),
             operation=task.callback.operation,
@@ -386,9 +399,9 @@ async def get_payload_by_uuid(request):
         from app.api.task_api import add_all_payload_info
 
         payload_info = await add_all_payload_info(payload)
+        payload_json["commands"] = payload_info["commands"]
         payload_json["c2info"] = payload_info["c2info"]
         payload_json["build_parameters"] = payload_info["build_parameters"]
-
         return {"status": "success", "response": payload_json}
     except Exception as e:
         print(str(traceback.format_exc()))
@@ -489,73 +502,113 @@ async def build_payload_from_template(request):
                 "username": task.operator.username,
             },
         )
-        if rsp["status"] == "success":
-            query = await db_model.payload_query()
-            payload = await db_objects.get(query, uuid=rsp["uuid"])
-            payload.task = task
-            payload.pcallback = task.callback
-            payload.auto_generated = True
-            payload.callback_alert = False
-            payload.file_id.delete_after_fetch = True
-            await db_objects.update(payload.file_id)
-            await db_objects.update(payload)
-            # send a message back to the container to build a new payload
-            create_rsp = await write_payload(
-                payload.uuid,
-                {
-                    "current_operation": task.callback.operation.name,
-                    "username": task.operator.username,
-                },
-                data,
-            )
-            if create_rsp["status"] != "success":
-                payload.deleted = True
-                await db_objects.update(payload)
-                task.status = "error"
-                await db_objects.create(
-                    db_model.Response,
-                    task=task,
-                    response="Exception when building payload: {}".format(
-                        create_rsp["error"]
-                    ),
-                )
-                return {
-                    "status": "error",
-                    "error": "Failed to send build message to container: "
-                    + create_rsp["error"],
-                }
-            else:
-                task.status = "building..."
-                task.timestamp = datetime.datetime.utcnow()
-                await db_objects.update(task)
-                await db_objects.create(
-                    db_model.PayloadOnHost,
-                    host=host,
-                    payload=payload,
-                    operation=payload.operation,
-                    task=task,
-                )
-            from app.api.task_api import add_all_payload_info
-
-            payload_info = await add_all_payload_info(payload)
-            payload_info = {**payload_info, **payload.to_json()}
-            return {"status": "success", "response": payload_info}
-
-        else:
-            await db_objects.create(
-                db_model.Response,
-                task=task,
-                response="Exception when registering payload: {}".format(rsp["error"]),
-            )
-            return {
-                "status": "error",
-                "error": "Failed to register new payload: " + rsp["error"],
-            }
+        return await handle_automated_payload_creation_response(task, rsp, data, host)
     except Exception as e:
         print(str(sys.exc_info()[-1].tb_lineno) + " " + str(traceback.format_exc()))
         return {
             "status": "error",
             "error": "Failed to build payload: " + str(traceback.format_exc()),
+        }
+
+
+async def build_payload_from_parameters(request):
+    try:
+        from app.api.payloads_api import register_new_payload_func
+        task_query = await db_model.task_query()
+        task = await db_objects.get(task_query, id=request["task_id"])
+        host = task.callback.host.upper()
+        task.status = "building..."
+        await db_objects.update(task)
+        if (
+            "destination_host" in request
+            and request["destination_host"] != ""
+            and request["destination_host"] is not None
+            and request["destination_host"] not in ["localhost", "127.0.0.1", "::1"]
+        ):
+            host = request["destination_host"].upper()
+        if "tag" not in request or request["tag"] == "":
+            request["tag"] = "Autogenerated from task {} on callback {}".format(
+                str(task.id), str(task.callback.id))
+        if "filename" not in request or request["filename"] == "":
+            request["filename"] = "Task" + str(task.id) + "Payload"
+        rsp = await register_new_payload_func(
+            request,
+            {
+                "current_operation": task.callback.operation.name,
+                "username": task.operator.username,
+            },
+        )
+        return await handle_automated_payload_creation_response(task, rsp, request, host)
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": "Failed to build payload: " + str(traceback.format_exc()),
+        }
+
+
+async def handle_automated_payload_creation_response(task, rsp, data, host):
+    from app.api.payloads_api import write_payload
+
+    if rsp["status"] == "success":
+        query = await db_model.payload_query()
+        payload = await db_objects.get(query, uuid=rsp["uuid"])
+        payload.task = task
+        payload.pcallback = task.callback
+        payload.auto_generated = True
+        payload.callback_alert = False
+        payload.file_id.delete_after_fetch = True
+        await db_objects.update(payload.file_id)
+        await db_objects.update(payload)
+        # send a message back to the container to build a new payload
+        create_rsp = await write_payload(
+            payload.uuid,
+            {
+                "current_operation": task.callback.operation.name,
+                "username": task.operator.username,
+            },
+            data,
+        )
+        if create_rsp["status"] != "success":
+            payload.deleted = True
+            await db_objects.update(payload)
+            task.status = "error"
+            await db_objects.create(
+                db_model.Response,
+                task=task,
+                response="Exception when building payload: {}".format(
+                    create_rsp["error"]
+                ),
+            )
+            return {
+                "status": "error",
+                "error": "Failed to send build message to container: "
+                         + create_rsp["error"],
+            }
+        else:
+            task.status = "building..."
+            task.timestamp = datetime.datetime.utcnow()
+            await db_objects.update(task)
+            await db_objects.create(
+                db_model.PayloadOnHost,
+                host=host,
+                payload=payload,
+                operation=payload.operation,
+                task=task,
+            )
+        from app.api.task_api import add_all_payload_info
+
+        payload_info = await add_all_payload_info(payload)
+        payload_info = {**payload_info, **payload.to_json()}
+        return {"status": "success", "response": payload_info}
+    else:
+        await db_objects.create(
+            db_model.Response,
+            task=task,
+            response="Exception when registering payload: {}".format(rsp["error"]),
+        )
+        return {
+            "status": "error",
+            "error": "Failed to register new payload: " + rsp["error"],
         }
 
 
@@ -738,6 +791,27 @@ async def register_artifact(request):
         return {"status": "success"}
     except Exception as e:
         return {"status": "error", "error": "failed to create task artifact: " + str(e)}
+
+
+async def register_payload_on_host(request):
+    # {"action": "register_payload_on_host",
+    # "task_id": self.task_id,
+    # "host": host,
+    # "uuid": payload uuid
+    # })
+    try:
+        task_query = await db_model.task_query()
+        task = await db_objects.get(task_query, id=request["task_id"])
+    except Exception as e:
+        return {"status": "error", "error": "failed to find task"}
+    try:
+        payloadquery = await db_model.payload_query()
+        payload = await db_objects.get(payloadquery, uuid=request["uuid"], operation=task.operation)
+        payload_on_host = await db_objects.create(db_model.PayloadOnHost, payload=payload,
+                                                  host=request["host"].encode(), operation=task.operation, task=task)
+        return {"status": "success"}
+    except Exception as e:
+        return {"status": "error", "error": "Failed to find payload"}
 
 
 async def rabbit_c2_rpc_callback(

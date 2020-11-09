@@ -16,6 +16,7 @@ from sanic.log import logger
 from peewee import fn
 import shortuuid
 from app.api.rabbitmq_api import send_pt_rabbitmq_message
+import ujson as js
 
 
 # payloadtypes aren't inherent to an operation
@@ -241,7 +242,9 @@ async def sync_container_file_for_payload_type(request, ptype, user):
 
 
 async def import_payload_type_func(ptype, operator):
+    new_payload = False
     try:
+        #print(ptype)
         if "author" not in ptype:
             ptype["author"] = operator.username if operator is not None else ""
         if "note" not in ptype:
@@ -260,10 +263,11 @@ async def import_payload_type_func(ptype, operator):
                 "supports_dynamic_loading"
             ]
         except Exception as e:
+            new_payload = True
             payload_type = await db_objects.create(
                 PayloadType,
                 ptype=ptype["ptype"],
-                wrapper=ptype["ptype"],
+                wrapper=ptype["wrapper"],
                 supported_os=ptype["supported_os"],
                 file_extension=ptype["file_extension"],
                 author=ptype["author"],
@@ -348,16 +352,26 @@ async def import_payload_type_func(ptype, operator):
                     v.deleted = True
                     await db_objects.update(v)
             # go through support scripts and add as necessary
+            # first find all that currently exist
+            browserscriptquery = await db_model.browserscript_query()
+            operator_query = await db_model.operator_query()
+            support_scripts_db = await db_objects.execute(browserscriptquery.where(
+                (db_model.BrowserScript.payload_type == payload_type) &
+                (db_model.BrowserScript.command == None) &
+                (db_model.BrowserScript.operator == None)
+            ))
+            support_scripts = {s.name: s for s in support_scripts_db}
             if "support_scripts" in ptype:
-                browserscriptquery = await db_model.browserscript_query()
-                operator_query = await db_model.operator_query()
                 for support_script in ptype["support_scripts"]:
+                    support_scripts.pop(support_script["name"], None)
                     try:
                         # first update the base case,then loop through operators
                         script = await db_objects.get(
                             browserscriptquery,
                             name=support_script["name"],
                             payload_type=payload_type,
+                            command=None,
+                            operator=None,
                         )
                         script.container_version = support_script["script"]
                         script.script = support_script["script"]
@@ -373,6 +387,8 @@ async def import_payload_type_func(ptype, operator):
                             payload_type=payload_type,
                             author=support_script["author"],
                             container_version_author=support_script["author"],
+                            command=None,
+                            operator=None
                         )
                     # now loop through all users
                     operators = await db_objects.execute(
@@ -386,6 +402,7 @@ async def import_payload_type_func(ptype, operator):
                                 name=support_script["name"],
                                 payload_type=payload_type,
                                 operator=op,
+                                command=None
                             )
                             script.container_version = support_script["script"]
                             script.container_version_author = support_script["author"]
@@ -403,7 +420,27 @@ async def import_payload_type_func(ptype, operator):
                                 payload_type=payload_type,
                                 author=support_script["author"],
                                 container_version_author=support_script["author"],
+                                command=None
                             )
+            # if there's anything left in support_scripts, we need to delete them
+            for k,v in support_scripts.items():
+                operators = await db_objects.execute(
+                    operator_query.where(db_model.Operator.deleted == False)
+                )
+                for op in operators:
+                    try:
+                        # first update the base case,then loop through operators
+                        script = await db_objects.get(
+                            browserscriptquery,
+                            name=v.name,
+                            payload_type=payload_type,
+                            operator=op,
+                            command=None
+                        )
+                        await db_objects.delete(script)
+                    except Exception as e:
+                        pass
+                await db_objects.delete(v)
             # now that we have the payload type, start processing the commands and their parts
             await import_command_func(payload_type, operator, ptype["commands"])
             if "c2_profiles" in ptype:
@@ -436,7 +473,7 @@ async def import_payload_type_func(ptype, operator):
                 # delete any mappings that used to exist but are no longer listed by the agent
                 for k, v in current_c2_dict.items():
                     await db_objects.delete(v)
-            return {"status": "success", **payload_type.to_json()}
+            return {"status": "success", "new": new_payload, **payload_type.to_json()}
         except Exception as e:
             logger.exception("exception on importing payload type")
             return {"status": "error", "error": str(e)}
@@ -592,7 +629,10 @@ async def import_command_func(payload_type, operator, command_list):
                     )
                     cmd_param.type = param["type"]
                     if "default_value" in param and param["default_value"] is not None:
-                        cmd_param.default_value = param["default_value"]
+                        if cmd_param.type == "Array":
+                            cmd_param.default_value = js.dumps(param["default_value"])
+                        else:
+                            cmd_param.default_value = param["default_value"]
                     if (
                         "supported_agents" in param
                         and param["supported_agents"] is not None
@@ -622,25 +662,31 @@ async def import_command_func(payload_type, operator, command_list):
                         ATTACKCommand, command=command, attack=attck
                     )
             # now process the command file
+            browserscriptquery = await db_model.browserscript_query()
+            found_script = False
+            try:
+                # first try to find if one exists currently
+                script = await db_objects.get(
+                    browserscriptquery,
+                    payload_type=payload_type,
+                    operator=None,
+                    command=command,
+                )
+                found_script = True
+            except Exception as e:
+                script = None
+            # get the current script if one exists
             if "browser_script" in cmd:
-                browserscriptquery = await db_model.browserscript_query()
-                try:
-                    # first update the base case,then loop through operators
-                    script = await db_objects.get(
-                        browserscriptquery,
-                        name=cmd["browser_script"]["name"],
-                        payload_type=payload_type,
-                        command=command,
-                    )
+                # this means we have one to add or update
+                if found_script:
                     script.container_version = cmd["browser_script"]["script"]
                     script.script = cmd["browser_script"]["script"]
                     script.container_version_author = cmd["browser_script"]["author"]
                     script.author = cmd["browser_script"]["author"]
                     await db_objects.update(script)
-                except Exception as e:
-                    await db_objects.create(
+                else:
+                    script = await db_objects.create(
                         db_model.BrowserScript,
-                        name=cmd["browser_script"]["name"],
                         script=cmd["browser_script"]["script"],
                         container_version=cmd["browser_script"]["script"],
                         payload_type=payload_type,
@@ -658,7 +704,6 @@ async def import_command_func(payload_type, operator, command_list):
                         # first update the base case,then loop through operators
                         script = await db_objects.get(
                             browserscriptquery,
-                            name=cmd["browser_script"]["name"],
                             payload_type=payload_type,
                             operator=op,
                             command=command,
@@ -674,7 +719,6 @@ async def import_command_func(payload_type, operator, command_list):
                     except Exception as e:
                         await db_objects.create(
                             db_model.BrowserScript,
-                            name=cmd["browser_script"]["name"],
                             script=cmd["browser_script"]["script"],
                             container_version=cmd["browser_script"]["script"],
                             operator=op,
@@ -683,6 +727,27 @@ async def import_command_func(payload_type, operator, command_list):
                             author=cmd["browser_script"]["author"],
                             container_version_author=cmd["browser_script"]["author"],
                         )
+            else:
+                if found_script:
+                    # this means we need to get rid of the browser script
+                    # now loop through all users
+                    operator_query = await db_model.operator_query()
+                    operators = await db_objects.execute(
+                        operator_query.where(db_model.Operator.deleted == False)
+                    )
+                    for op in operators:
+                        try:
+                            # first update the base case,then loop through operators
+                            op_script = await db_objects.get(
+                                browserscriptquery,
+                                payload_type=payload_type,
+                                operator=op,
+                                command=command,
+                            )
+                            await db_objects.delete(op_script)
+                        except Exception as e:
+                            pass
+                    await db_objects.delete(script)
             command_list.pop(command.cmd, None)
         else:
             # we need to mark the command as deleted
@@ -883,7 +948,7 @@ async def import_command_func(payload_type, operator, command_list):
                 # first update the base case,then loop through operators
                 script = await db_objects.get(
                     browserscriptquery,
-                    name=cmd["browser_script"]["name"],
+                    operator=None,
                     payload_type=payload_type,
                     command=command,
                 )
@@ -895,11 +960,11 @@ async def import_command_func(payload_type, operator, command_list):
             except Exception as e:
                 await db_objects.create(
                     db_model.BrowserScript,
-                    name=cmd["browser_script"]["name"],
                     script=cmd["browser_script"]["script"],
                     container_version=cmd["browser_script"]["script"],
                     payload_type=payload_type,
                     command=command,
+                    operator=None,
                     author=cmd["browser_script"]["author"],
                     container_version_author=cmd["browser_script"]["author"],
                 )
@@ -913,7 +978,6 @@ async def import_command_func(payload_type, operator, command_list):
                     # first update the base case,then loop through operators
                     script = await db_objects.get(
                         browserscriptquery,
-                        name=cmd["browser_script"]["name"],
                         payload_type=payload_type,
                         operator=op,
                         command=command,
@@ -927,7 +991,6 @@ async def import_command_func(payload_type, operator, command_list):
                 except Exception as e:
                     await db_objects.create(
                         db_model.BrowserScript,
-                        name=cmd["browser_script"]["name"],
                         script=cmd["browser_script"]["script"],
                         container_version=cmd["browser_script"]["script"],
                         operator=op,

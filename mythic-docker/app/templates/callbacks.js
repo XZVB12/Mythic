@@ -30,6 +30,7 @@ var callback_table = new Vue({
         callbacks,
         filter: "",
         sort: "id",
+        size: 25,
         direction: -1,
         selected_node: undefined,
         view_selection: "table view",
@@ -37,6 +38,7 @@ var callback_table = new Vue({
         high_integrity_color: "red",
         disconnected_color: "orange",
         children_color: "#32DFEC",
+        started_filebrowser_websocket: false,
         graph_view_pieces: {
             simulation: undefined,
             node: undefined,
@@ -60,6 +62,31 @@ var callback_table = new Vue({
         }
     },
     methods: {
+        adjust_pane_sizes: function(){
+            $('#editPanesTop').val(this.size);
+            $('#editPanesBottom').val(task_data.size);
+            $('#editPanesModal').modal('show');
+            $('#editPanesSubmit').unbind('click').click(function () {
+                callback_table.size = $('#editPanesTop').val();
+                task_data.size = $('#editPanesBottom').val();
+                if (callback_table.view_selection === "graph view") {
+                    $('#rect').css('height', 'calc(' + callback_table.size + 'vh)');
+                    $('#d3_selectable_force_directed_graph').css('height', 'calc(' + callback_table.size + 'vh)');
+                    let parentWidth = d3.select('svg').node().parentNode.clientWidth;
+                    let parentHeight = d3.select('svg').node().parentNode.clientHeight;
+                    let svg = d3.select('svg').attr('width', parentWidth).attr('height', parentHeight);
+                    callback_table.graph_node_update();
+                }
+                if (callback_table.view_selection === "tree view") {
+                    $('#rect').css('height', 'calc(' + callback_table.size + 'vh)');
+                    $('#d3_selectable_force_directed_graph').css('height', 'calc(' + callback_table.size + 'vh)');
+                    let parentWidth = d3.select('svg').node().parentNode.clientWidth;
+                    let parentHeight = d3.select('svg').node().parentNode.clientHeight;
+                    let svg = d3.select('svg').attr('width', parentWidth).attr('height', parentHeight);
+                    callback_table.tree_node_update();
+                }
+            });
+        },
         deselect_all_but_callback: function (callback) {
             Object.keys(task_data.meta).forEach(function (key) {
                 if (key !== "file_browser") {
@@ -109,12 +136,7 @@ var callback_table = new Vue({
             }, 0);
 
             //set the autocomplete for the input field
-            let autocomplete_commands = [];
-            for (let i = 0; i < task_data.ptype_cmd_params[callbacks[callback.id]['payload_type']].length; i++) {
-                autocomplete_commands.push(task_data.ptype_cmd_params[callbacks[callback.id]['payload_type']][i].cmd);
-            }
-            autocomplete_commands.sort((a, b) => (b > a) ? -1 : ((a > b) ? 1 : 0));
-            autocomplete(document.getElementById("commandline"), autocomplete_commands);
+            autocomplete(document.getElementById("commandline"), meta[callback.id]['commands']);
             meta[callback.id]['badges'] = 0;
             httpGetAsync("{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/callbacks/" + callback['id'] + "/all_tasking", get_all_tasking_callback, "GET", null);
         },
@@ -184,6 +206,11 @@ var callback_table = new Vue({
             }, 0);
         },
         show_file_browser: function (callback) {
+            if( !this.started_filebrowser_websocket){
+                startwebsocket_filebrowser();
+                alertTop("info", "Started streaming file browser data...");
+                this.started_filebrowser_websocket = true;
+            }
             Vue.set(meta[callback.id], 'file_browser', true);
             this.deselect_all_but_callback(callback);
             Vue.set(meta[callback.id], 'file_browser_selected', true);
@@ -959,13 +986,17 @@ var callback_table = new Vue({
                     this.graph_view_pieces.simulation = undefined;
                 }
                 if (imp === 'table view') {
-                    $('#callback_table').css('height', 'calc(30vh)');
-                    $('#bottom-tabs-content').css("height", "calc(51vh)");
+                    callback_table.size = 25;
+                    task_data.size = 51;
+                    //$('#callback_table').css('height', 'calc(30vh)');
+                    //$('#bottom-tabs-content').css("height", "calc(51vh)");
                 } else if (imp === "graph view") {
-                    $('#callback_table').css('height', 'calc(51vh)');
-                    $('#rect').css('height', 'calc(45vh)');
-                    $('#d3_selectable_force_directed_graph').css('height', 'calc(45vh)');
-                    $('#bottom-tabs-content').css("height", "calc(30vh)");
+                    callback_table.size = 51;
+                    task_data.size = 30;
+                    //$('#callback_table').css('height', 'calc(51vh)');
+                    //$('#rect').css('height', 'calc(45vh)');
+                    //$('#d3_selectable_force_directed_graph').css('height', 'calc(45vh)');
+                   // $('#bottom-tabs-content').css("height", "calc(30vh)");
                     this.graph_view_pieces.selected_label_watcher = this.$watch(['graph_view_pieces', 'selected_node_labels'].join('.'), () => {
                         this.graph_node_update();
                     });
@@ -1089,10 +1120,12 @@ var callback_table = new Vue({
                         });
                     }, 0);
                 } else if (imp === 'tree view') {
-                    $('#callback_table').css('height', 'calc(51vh)');
-                    $('#rect').css('height', 'calc(45vh)');
-                    $('#d3_selectable_force_directed_graph').css('height', 'calc(45vh)');
-                    $('#bottom-tabs-content').css("height", "calc(30vh)");
+                    callback_table.size = 51;
+                    task_data.size = 30;
+                    //$('#callback_table').css('height', 'calc(51vh)');
+                    //$('#rect').css('height', 'calc(45vh)');
+                    //$('#d3_selectable_force_directed_graph').css('height', 'calc(45vh)');
+                   // $('#bottom-tabs-content').css("height", "calc(30vh)");
                     this.tree_view_pieces.selected_label_watcher = this.$watch(['tree_view_pieces', 'selected_node_labels'].join('.'), () => {
                         this.tree_node_update();
                     });
@@ -1202,7 +1235,7 @@ function add_edge_for_graph_view(event) {
     cb['source'] = cb['tmp_src']['id'];
     cb['target'] = JSON.parse(cb['destination'])['id'];
     if ("name" in cb) {
-        console.log("adding c2 node and edge");
+        //console.log("adding c2 node and edge");
         // add the c2 node
         let found_s = false;
         let found_d = false;
@@ -1365,51 +1398,6 @@ function add_edge_for_tree_view(event) {
     }
 }
 
-// ------- HANDLE A DRAG BAR IN THE MIDDLE OF THE SCREEN FOR ADJUSTING SIZE ----------
-// http://jsfiddle.net/Le8rjs52/
-var dragging = false;
-$('#dragbar').mousedown(function (e) {
-    e.preventDefault();
-    dragging = true;
-    let main = $('#bottom-data');
-    let ghostbar = $('<div>',
-        {
-            id: 'ghostbar',
-            css: {
-                width: main.outerWidth(),
-                top: e.pageY,
-                left: main.offset().left,
-                height: "3px",
-                cursor: "col-resize"
-            }
-        }).appendTo('#wrapper');
-
-    $(document).mousemove(function (ev) {
-        ghostbar.css("top", (ev.pageY + 2));
-    });
-});
-$(document).mouseup(function (e) {
-    if (dragging) {
-        let percentage = ((e.pageY - $('#wrapper').offset().top) / $('#wrapper').height()) * 100;
-        let mainPercentage = 100 - percentage;
-        //console.log(percentage);
-        //console.log(mainPercentage);
-        $('#callback_table').css("height", "calc(" + (percentage * 83) / 100 + "vh)");
-        $('#rect').css("height", "calc(" + (percentage * 74) / 100 + "vh)");
-        $('#d3_selectable_force_directed_graph').css("height", "calc(" + (percentage * 74) / 100 + "vh)");
-        $('#bottom-tabs-content').css("height", "calc(" + (mainPercentage * 83) / 100 + "vh)");
-        $('#ghostbar').remove();
-        $(document).unbind('mousemove');
-        if (callback_table.view_selection === "graph view") {
-            callback_table.graph_node_update();
-        }
-        if (callback_table.view_selection === "tree view") {
-            callback_table.tree_node_update();
-        }
-        dragging = false;
-    }
-});
-// ---------- END DRAG BAR ADJUSTMENT -------------------------
 var group_modify = new Vue({
     el: '#group_modify',
     delimiters: ['[[', ']]'],
@@ -1487,6 +1475,10 @@ function view_callback_info(response) {
                 }
                 data['path'] = min;
             }
+            data["loaded_commands"].sort((a, b) => (a.command > b.command) ? 1 : ((b.command > a.command) ? -1 : 0));
+            for(const [k,v] of Object.entries(data["c2_profiles"])){
+                data["c2_profiles"][k].sort((a, b) => (a.description > b.description) ? 1 : ((b.description > a.description) ? -1 : 0));
+            }
             callback_info_modal.info = data;
             $('#CallbackInfoModal').modal('show');
             callback_info_modal.$forceUpdate();
@@ -1552,7 +1544,8 @@ var task_data = new Vue({
         path: "",
         callback: -1,
         file_browser_permissions: {},
-        file_browser_history_files: []
+        file_browser_history_files: [],
+        size: 50
     },
     methods: {
         task_button: function (data) {
@@ -1582,7 +1575,10 @@ var task_data = new Vue({
                                 "Command Help", false);
                             return;
                         } else if (params.length === 0) {
-                            alertTop("info", "Usage: help {command_name}", 2);
+                            alertTop("info", "<b>Usage: </b> help {command_name}" +
+                                "<br><b>Note: </b>All commands for " + callbacks[data['cid']]['payload_type'] +
+                                " can be found in the <a target='_blank' href=\"http://{{links.server_ip}}:{{links.DOCUMENTATION_PORT}}/agents/\" style='color:darkblue'> Help Container</a>", 0,
+                                "Command Help", false);
                             return;
                         }
                     }
@@ -1663,7 +1659,15 @@ var task_data = new Vue({
                                 if (param.choices.length > 0) {
                                     param.choice_value = param.choices.split("\n")[0];
                                 }
-                                //param.string_value = param.hint;
+                                if(param.type === "Array"){
+                                    param.array_value = JSON.parse(param.default_value);
+                                }else if(param.type === "String"){
+                                    param.string_value = param.default_value;
+                                }else if(param.type === "Number"){
+                                    param.number_value = param.default_value;
+                                }else if(param.type === "Boolean"){
+                                    param.boolean_value = param.default_value;
+                                }
                                 //console.log(param);
                                 if (param.name in last_vals) {
                                     //lets set the appropriate param value to the old value
@@ -1765,6 +1769,8 @@ var task_data = new Vue({
                                             }
                                         }
                                     }
+                                    param.payloads.sort((a, b) => (a.id > b.id) ? -1 : ((b.id > a.id) ? 1 : 0));
+                                    param['payloadlist_value'] = param.payloads.length > 0 ? param.payloads[0].uuid : "";
                                 }
                                 params_table.command_params.push(param);
                             }
@@ -1857,6 +1863,17 @@ var task_data = new Vue({
                             });
                         } else {
                             //somebody knows what they're doing or a command just doesn't have parameters, send it off
+                            // first check to make sure we're not trying to submit text in place of required file parameter
+                            if(this.ptype_cmd_params[callbacks[data['cid']]['payload_type']][i]['params'].length !== 0){
+                                for (let j = 0; j < this.ptype_cmd_params[callbacks[data['cid']]['payload_type']][i]['params'].length; j++) {
+                                    if(this.ptype_cmd_params[callbacks[data['cid']]['payload_type']][i]['params'][j]["type"] === "File" && this.ptype_cmd_params[callbacks[data['cid']]['payload_type']][i]['params'][j]["required"]){
+                                        alertTop("warning", "This command requires files to be uploaded through a dialog box.", 6);
+                                        task_data.input_field = command;
+                                        task_data.task_button(task_data.input_field_placeholder);
+                                        return;
+                                    }
+                                }
+                            }
                             httpGetAsync("{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/tasks/callback/" + data['cid'], post_task_callback_func, "POST",
                                 {"command": command, "params": params});
 
@@ -1898,12 +1915,7 @@ var task_data = new Vue({
             Vue.set(metadata, 'badges', 0);
             Vue.set(callback_table.callbacks[metadata['id']], 'selected', true);
             //set the autocomplete for the input field
-            let autocomplete_commands = [];
-            for (let i = 0; i < this.ptype_cmd_params[callbacks[metadata.id]['payload_type']].length; i++) {
-                autocomplete_commands.push(this.ptype_cmd_params[callbacks[metadata.id]['payload_type']][i].cmd);
-            }
-            autocomplete_commands.sort((a, b) => (b > a) ? -1 : ((a > b) ? 1 : 0));
-            autocomplete(document.getElementById("commandline"), autocomplete_commands);
+            autocomplete(document.getElementById("commandline"), meta[metadata['id']]['commands']);
             Vue.nextTick().then(function () {
                 $('#bottom-tabs-content').scrollTop($('#bottom-tabs-content')[0].scrollHeight);
             });
@@ -2378,11 +2390,24 @@ var task_data = new Vue({
             });
         },
         view_file_data: function (data) {
-            try {
-                this.file_browser_permissions = JSON.parse(data['permissions']);
-            } catch (error) {
-                this.file_browser_permissions = {"Permissions": data['permissions']};
-            }
+            httpGetAsync("{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/filebrowserobj/" + data['id'] + "/permissions", (response)=>{
+                    try{
+                        let perms = JSON.parse(response);
+                        if(perms['status'] === "success"){
+                            try {
+                                this.file_browser_permissions = JSON.parse(perms['permissions']);
+                            } catch (error) {
+                                this.file_browser_permissions = {"Permissions": perms['permissions']};
+                            }
+                        }else{
+                            alertTop("warning", "Failed to fetch permissions: " + perms['error']);
+                        }
+                    }catch(error){
+                        console.log(error);
+                        alertTop("danger", "Session expired, please refresh");
+                    }
+                }, "GET", null);
+
             $('#fileBrowserPermissions').modal('show');
         },
         view_download_history: function (data) {
@@ -2454,11 +2479,15 @@ var task_data = new Vue({
             }
         },
         double_click_row: function (data) {
-            if ("children" in data) {
+            if (data.hasOwnProperty("children") && data.children !== undefined) {
                 task_data.setBrowserTableData(data['data'], data['children']);
                 task_data.$forceUpdate();
             } else {
-                alertTop("info", "No subfolders to enter");
+                if(data.data.is_file){
+                    alertTop("info", "Cannot view children of files, only folders.");
+                }else{
+                    alertTop("info", "Children of folder unknown.");
+                }
             }
         }
     },
@@ -2584,8 +2613,10 @@ Vue.component('browser-menu', {
         '      </div>\n' +
         '    </div>\n' +
         '    <browser-menu \n' +
-        '      v-if="showChildren"\n' +
+        '      v-show="showChildren"\n' +
         '      v-for="node in children" \n' +
+        '      :key="Object.values(node)[0].data.id" \n' +
+        '      :parent="this"\n' +
         '      :children="Object.values(node)[0].children" \n' +
         '      :data="Object.values(node)[0].data"\n' +
         '      :depth="depth + 1"   \n' +
@@ -2593,7 +2624,7 @@ Vue.component('browser-menu', {
         '    >\n' +
         '    </browser-menu>\n' +
         '  </div>',
-    props: ['children', 'depth', 'data', 'host'],
+    props: ['children', 'depth', 'data', 'host', 'parent'],
     data() {
         return {
             showChildren: true,
@@ -2610,13 +2641,13 @@ Vue.component('browser-menu', {
         },
         labelClasses() {
             let cls = "";
-            if (this.children !== undefined && this.children.length > 0) {
+            if (this.children !== undefined) {
                 cls += ' has-children ';
             }
             return cls;
         },
         indent() {
-            //rreturn { transform: `translate(${this.depth * 30}px)`}
+            //return { transform: `translate(${this.depth * 30}px)`}
         }
     },
     methods: {
@@ -2624,10 +2655,19 @@ Vue.component('browser-menu', {
             this.showChildren = !this.showChildren;
         },
         test() {
-            //if(this.data.is_file){return;}
-            //console.log(this.children);
-            task_data.setBrowserTableData(this.data, this.children);
-            task_data.$forceUpdate();
+            if(this.data.is_file){
+                task_data.setBrowserTableData(this.$parent.data, this.$parent.children);
+                task_data.$forceUpdate();
+                return;
+            }
+            if(this.children !== undefined){
+                task_data.setBrowserTableData(this.data, this.children);
+                this.$forceUpdate();
+            }else{
+                alertTop("info", "Children of folder unknown, showing parent folder instead.");
+                task_data.setBrowserTableData(this.$parent.data, this.$parent.children);
+                this.$forceUpdate();
+            }
         },
         get_latest_download_path() {
             return "{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/files/download/" + this.data['files'][0]['agent_file_id'];
@@ -2657,7 +2697,7 @@ function startwebsocket_processlist(cid) {
                     Vue.set(meta[key], 'process_list_data', data['process_list']);
                     Vue.set(meta[key], 'process_list_tree', data['tree_list']);
                     task_data.$forceUpdate();
-                    alertTop("success", "Updated process list on " + data['process_list']['host']);
+                    //alertTop("success", "Updated process list on " + data['process_list']['host']);
                 }
             });
         }
@@ -2702,6 +2742,19 @@ var params_table = new Vue({
         payloadonhost: {},
     },
     methods: {
+        restore_default_values: function(){
+            for(let i = 0; i < this.command_params.length; i ++){
+                if(this.command_params[i].type === "Array"){
+                    this.command_params[i].array_value = JSON.parse(this.command_params[i].default_value);
+                }else if(this.command_params[i].type === "String"){
+                    this.command_params[i].string_value = this.command_params[i].default_value;
+                }else if(this.command_params[i].type === "Number"){
+                    this.command_params[i].number_value = this.command_params[i].default_value;
+                }else if(this.command_params[i].type === "Boolean"){
+                    this.command_params[i].boolean_value = this.command_params[i].default_value;
+                }
+            }
+        },
         command_params_add_array_element: function (param) {
             param.array_value.push('');
         },
@@ -3314,7 +3367,7 @@ function startwebsocket_newkeylogs() {
             let rsp = JSON.parse(event.data);
             //console.log(rsp);
             let key_stroke_alert = rsp['keystrokes'];
-            alertTop("success", key_stroke_alert, 2, "New Keylog from " + rsp['task']);
+            //alertTop("success", key_stroke_alert, 2, "New Keylog from " + rsp['task']);
             //console.log(rsp);
             if (task_data.meta[rsp['callback']['id']]['keylogs'] === true) {
                 //only try to update a view if the view is actually open
@@ -3480,6 +3533,7 @@ startwebsocket_callback_graphedges();
 function startwebsocket_callback(cid) {
     // get updated information about our callback
     let ws = new WebSocket('{{ws}}://{{links.server_ip}}:{{links.server_port}}/ws/unified_callback/' + cid);
+    meta[cid]['commands'] = [];
     ws.onmessage = function (event) {
         if (event.data === "no_operation") {
             alertTop("warning", "No operation selected");
@@ -3494,14 +3548,38 @@ function startwebsocket_callback(cid) {
                 add_new_response(data, true);
             } else if (data['channel'].includes("filemeta")) {
                 add_new_filemeta(data);
-            } else {
+            } else if (data['channel'].includes("loadedcommand")){
+                update_loaded_commands(data);
+            } else{
                 console.log("Unknown message from server: " + event.data);
             }
         }
     };
     return ws;
 }
-
+function update_loaded_commands(data){
+    if (!Object.prototype.hasOwnProperty.call(meta[data['callback']], 'commands')) {
+        meta[data['callback']]['commands'] = [];
+    }
+    if(data['channel'].includes("new")){
+        meta[data['callback']]['commands'].push({"name": data['command'], "version": data["version"]});
+        meta[data['callback']]['commands'].sort((a, b) => (b.name > a.name) ? -1 : ((a.name > b.name) ? 1 : 0));
+    }else if(data['channel'].includes("updated")){
+        for(let i = 0; i < meta[data['callback']]['commands'].length; i++){
+            if(meta[data['callback']]['commands'][i]["name"] === data["command"]){
+                meta[data['callback']]['commands'][i]["version"] = data["version"];
+                return;
+            }
+        }
+    } else{
+        for(let i = 0; i < meta[data['callback']]['commands'].length; i++){
+            if(meta[data['callback']]['commands'][i]["name"] === data["command"]){
+                delete meta[data['callback']]['commands'][i];
+                return;
+            }
+        }
+    }
+}
 function add_new_filemeta(data) {
     if (data['is_screenshot']) {
         if (!Object.prototype.hasOwnProperty.call(meta[data['callback_id']], 'images')) {
@@ -3510,17 +3588,11 @@ function add_new_filemeta(data) {
         for (let i = 0; i < meta[data['callback_id']]['images'].length; i++) {
             if (meta[data['callback_id']]['images'][i]['id'] === data['id']) {
                 Vue.set(meta[data['callback_id']]['images'], i, Object.assign({}, meta[data['callback_id']]['images'][i], data));
-                if (data['complete']) {
-                    alertTop("success", "Finished getting screenshot in callback " + data['callback_id']);
-                } else {
-                    alertTop("info", "Received new screenshot chunk", 4);
-                }
                 return;
             }
         }
         data['remote_path'] = "{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/files/screencaptures/" + data['agent_file_id'];
         meta[data['callback_id']]['images'].push(data);
-        alertTop("info", "Started new screenshot...", 1);
     }
 }
 
@@ -3547,21 +3619,21 @@ function autocomplete(inp, arr) {
         /*append the DIV element as a child of the autocomplete container:*/
         this.parentNode.appendChild(a);
         /*for each item in the array...*/
-        for (i = 0; i < arr.length; i++) {
+        for (i = 0; i < meta[task_data.input_field_placeholder['cid']]["commands"].length; i++) {
             /*check if the item starts with the same letters as the text field value:*/
-            if (arr[i].toUpperCase().includes(val.toUpperCase())) {
+            if (meta[task_data.input_field_placeholder['cid']]["commands"][i]["name"].toUpperCase().includes(val.toUpperCase())) {
                 /*create a DIV element for each matching element:*/
-                if (arr[i].length > longest) {
-                    longest = arr[i].length;
+                if (meta[task_data.input_field_placeholder['cid']]["commands"][i]["name"].length > longest) {
+                    longest = meta[task_data.input_field_placeholder['cid']]["commands"][i]["name"].length;
                 }
                 b = document.createElement("DIV");
                 /*make the matching letters bold:*/
-                let start = arr[i].toUpperCase().indexOf(val.toUpperCase());
-                b.innerHTML = arr[i].substr(0, start);
-                b.innerHTML += "<strong><span class='matching'>" + arr[i].substr(start, val.length) + "</span></strong>";
-                b.innerHTML += arr[i].substr(val.length + start);
+                let start = meta[task_data.input_field_placeholder['cid']]["commands"][i]["name"].toUpperCase().indexOf(val.toUpperCase());
+                b.innerHTML = meta[task_data.input_field_placeholder['cid']]["commands"][i]["name"].substr(0, start);
+                b.innerHTML += "<strong><span class='matching'>" + meta[task_data.input_field_placeholder['cid']]["commands"][i]["name"].substr(start, val.length) + "</span></strong>";
+                b.innerHTML += meta[task_data.input_field_placeholder['cid']]["commands"][i]["name"].substr(val.length + start);
                 /*insert a input field that will hold the current array item's value:*/
-                b.innerHTML += "<input type='hidden' value='" + arr[i] + "'>";
+                b.innerHTML += "<input type='hidden' value='" + meta[task_data.input_field_placeholder['cid']]["commands"][i]["name"] + "'>";
                 /*execute a function when someone clicks on the item value (DIV element):*/
                 b.addEventListener("click", function () {
                     /*insert the value for the autocomplete text field:*/
@@ -3583,7 +3655,17 @@ function autocomplete(inp, arr) {
             try {
                 //we want to close the autocomplete menu and fill in with the top-most element
                 if (currentFocus === -1) {
-                    task_data.input_field = x[0].textContent;
+                    let val = "";
+                    for(let j = 0; j < x.length; j++){
+                        if(task_data.input_field.toLowerCase() === x[j].textContent.toLowerCase()){
+                            val = x[j].textContent;
+                            break;
+                        }
+                    }
+                    if(val === ""){
+                        val = x[0].textContent;
+                    }
+                    task_data.input_field = val;
                 } else {
                     task_data.input_field = x[currentFocus].textContent;
                 }
@@ -3609,9 +3691,19 @@ function autocomplete(inp, arr) {
         } else if (e.keyCode === 27 && x !== null) {
             closeAllLists();
         } else if (e.keyCode === 13 && x !== null && x.length > 0) {
+            //user hit enter
             if (currentFocus === -1) {
-                //console.log(x);
-                task_data.input_field = x[0].textContent;
+                let val = "";
+                for(let j = 0; j < x.length; j++){
+                    if(task_data.input_field.toLowerCase() === x[j].textContent.toLowerCase()){
+                        val = x[j].textContent;
+                        break;
+                    }
+                }
+                if(val === ""){
+                    val = x[0].textContent;
+                }
+                task_data.input_field = val;
                 e.preventDefault();
                 closeAllLists("");
                 e.stopImmediatePropagation();
@@ -3765,7 +3857,13 @@ function timeConversion(millisec) {
     let minutes = Math.trunc(((millisec / (1000 * 60))) % 60);
     let hours = Math.trunc(((millisec / (1000 * 60 * 60))) % 24);
     let days = Math.trunc(((millisec / (1000 * 60 * 60 * 24))) % 365);
-    return days + ":" + hours + ":" + minutes + ":" + seconds;
+    let output = "";
+    if(days !== 0){ output += days + "d";}
+    if(hours !== 0){ output += hours + "h";}
+    if(minutes !== 0){ output += minutes + "m";}
+    output += seconds + "s";
+    return output;
+    //return days + ":" + hours + ":" + minutes + ":" + seconds;
 }
 /* eslint-enable no-unused-vars */
 function generate_background_color() {
@@ -3929,22 +4027,18 @@ function startwebsocket_filebrowser() {
             if (!initial_group_done) {
                 Vue.set(meta, "file_browser", data);
             } else {
-                if (data['callback'] !== undefined) {
-                    alertTop("info", "Updating file browsing data from callback: " + data['callback']);
-                }
                 // now we have streaming updates and need to merge them in
-                //console.log(data);
                 // first step is to find the right host
                 if (data['host'] === undefined || data['host'].length === 0) {
                     return
                 }
                 if (!Object.prototype.hasOwnProperty.call(meta['file_browser'], data['host'])) {
-                    meta['file_browser'][data['host']] = {
+                    Vue.set(meta["file_browser"], data["host"], {
                         "data": {
                             "name": data['host'],
                             "host": data['host']
                         }, "children": []
-                    };
+                    });
                 }
                 // what if we're adding a new top level root
                 if (data['parent'] === null) {
@@ -3953,7 +4047,8 @@ function startwebsocket_filebrowser() {
                             Object.assign(meta['file_browser'][data['host']]['children'][i][data['name']]['data'],
                                 meta['file_browser'][data['host']]['children'][i]['data'],
                                 data);
-                            break;
+                            task_data.$forceUpdate();
+                            return;
                         }
                     }
                     // if we get here, we have a root element that's new, so add it
@@ -3967,7 +4062,7 @@ function startwebsocket_filebrowser() {
                 }
                 setTimeout(() => { // setTimeout to put this into event queue
                     // executed after render
-                   task_data.$forceUpdate();
+                    task_data.$forceUpdate();
                 }, 0);
             }
         } else {
@@ -3982,7 +4077,7 @@ function startwebsocket_filebrowser() {
     };
 }
 
-startwebsocket_filebrowser();
+
 
 function add_update_file_browser(search, element) {
     //recursive base case
@@ -3991,28 +4086,30 @@ function add_update_file_browser(search, element) {
         Object.assign(element['data'],
             element['data'],
             search);
+        task_data.$forceUpdate();
         return true;
     }
+    if(element["is_file"]){return false;}
     //we aren't in the base case, so let's iterate through the current item's children
-    if (element['children'] === undefined) {
-        if (!element['is_file']) {
-            Vue.set(element, 'children', []);
+    if (element['children'] !== undefined) {
+        for (let i = 0; i < element['children'].length; i++) {
+            let result = add_update_file_browser(search, Object.values(element['children'][i])[0]);
+            if (result) {
+                //short circuit the path here, if we found it and added/updated, just exit all the recursion
+                return true;
+            }
         }
     }
-    for (let i = 0; i < element['children'].length; i++) {
-        //console.log("search item");
-        //console.log(element['children'][i]);
-        let result = add_update_file_browser(search, Object.values(element['children'][i])[0]);
-        if (result) {
-            //short circuit the path here, if we found it and added/updated, just exit all the recursion
-            return true;
-        }
-    }
+
     //if we get here, and parent is true, then we are the parent and failed to find the child, so we need to add it
     if (element['data']['id'] === search['parent']) {
         let new_data = {};
-        new_data[search['name']] = {"data": search, "children": []};
+        new_data[search['name']] = {"data": search, "children": undefined};
+        if(element['children'] === undefined){
+            Vue.set(element, "children", []);
+        }
         element['children'].push(new_data);
+        task_data.$forceUpdate();
         return true;
     } else {
         return false;

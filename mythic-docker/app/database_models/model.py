@@ -1372,7 +1372,7 @@ class FileBrowserObj(p.Model):
                         .decode("unicode-escape", errors="backslashreplace")
                         .encode("utf-8", errors="backslashreplace")
                         .decode(),
-            "permissions": self.permissions,
+            #"permissions": self.permissions,
             "name": bytes(getattr(self, "name"))
                         .decode("unicode-escape", errors="backslashreplace")
                         .encode("utf-8", errors="backslashreplace")
@@ -2220,6 +2220,7 @@ def pg_register_deletes():
         "disabledcommands",
         "browserscriptoperation",
         "credential",
+        "loadedcommands",
         "wrappedpayloadtypes",
     ]
     for table in updates:

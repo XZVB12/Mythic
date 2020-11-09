@@ -1,5 +1,6 @@
 // This page has all of the shared javascript functions used across a variety of pages
 /* eslint-disable no-redeclare,no-unused-vars */
+var mythic_endpoint = "{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}";
 function httpGetAsync(theUrl, callback, method, data) {
     try {
         let xhr = new XMLHttpRequest();
@@ -293,12 +294,24 @@ function toLocalTime(date) {
 
 }
 
-function sort_table(th) {
+function sort_table(th, content="string") {
     //sort the table
     const getCellValue = (tr, idx) => tr.children[idx].innerText || tr.children[idx].textContent;
-    const comparer = (idx, asc) => (a, b) => ((v1, v2) =>
+    let comparer;
+    if(content === "string"){
+        comparer = (idx, asc) => (a, b) => ((v1, v2) =>
             v1 !== '' && v2 !== '' && !isNaN(v1) && !isNaN(v2) ? v1 - v2 : v1.toString().localeCompare(v2.toString())
     )(getCellValue(asc ? a : b, idx), getCellValue(asc ? b : a, idx));
+    }else if(content === "date"){
+        comparer = (idx, asc) => (a, b) => ((v1, v2) =>
+           new Date(v1) - new Date(v2)
+    )(getCellValue(asc ? a : b, idx), getCellValue(asc ? b : a, idx));
+    }else if(content === "int"){
+        comparer = (idx, asc) => (a, b) => ((v1, v2) =>
+            parseInt(v1) - parseInt(v2)
+    )(getCellValue(asc ? a : b, idx), getCellValue(asc ? b : a, idx));
+    }
+
     let table = th.parentElement.parentElement;
     Array.from(table.querySelectorAll('tr:nth-child(n+2)'))
         .sort(comparer(Array.from(th.parentNode.children).indexOf(th), this.asc = !this.asc))

@@ -33,9 +33,8 @@ var callback_table = new Vue({
         task_button: function (data) {
             //submit the input_field data as a task, need to know the current callback id though
             //first check if there are any active auto-complete tabs. If there are, we won't submit.
-            let autocomplete_list = document.getElementById(data.id + 'commandlineautocomplete-list');
+            let autocomplete_list = document.getElementById(data.id + "autocomplete-list");
             if (autocomplete_list !== null && autocomplete_list.hasChildNodes()) {
-                alertTop("warning", "submission error");
                 return;
             }
             let task = this.callbacks[data.id].input_field.trim().split(" ");
@@ -57,7 +56,9 @@ var callback_table = new Vue({
                                 " can be found in the <a target='_blank' href=\"http://{{links.server_ip}}:{{links.DOCUMENTATION_PORT}}/agents/\" style='color:darkblue'> Help Container</a>", 0, "Command Help", false);
                             return;
                         } else if (params.length === 0) {
-                            alertTop("info", "Usage: help {command_name}", 2);
+                            alertTop("info", "<b>Usage: </b> help {command_name}" +
+                                "<br><b>Note: </b>All commands for " + this.callbacks[data['id']]['payload_type'] +
+                                " can be found in the <a target='_blank' href=\"http://{{links.server_ip}}:{{links.DOCUMENTATION_PORT}}/agents/\" style='color:darkblue'> Help Container</a>", 0, "Command Help", false);
                             return;
                         }
                     }
@@ -124,7 +125,15 @@ var callback_table = new Vue({
                                 if (param.choices.length > 0) {
                                     param.choice_value = param.choices.split("\n")[0];
                                 }
-                                //param.string_value = param.hint;
+                                if(param.type === "Array"){
+                                    param.array_value = JSON.parse(param.default_value);
+                                }else if(param.type === "String"){
+                                    param.string_value = param.default_value;
+                                }else if(param.type === "Number"){
+                                    param.number_value = param.default_value;
+                                }else if(param.type === "Boolean"){
+                                    param.boolean_value = param.default_value;
+                                }
                                 if (param.type === 'PayloadList') {
                                     // we only want to add to param.payloads things from params_table.payloads that match the supported_agent types listed
                                     let supported_agents = param.supported_agents.split("\n");
@@ -140,6 +149,8 @@ var callback_table = new Vue({
                                             }
                                         }
                                     }
+                                    param.payloads.sort((a, b) => (a.id > b.id) ? -1 : ((b.id > a.id) ? 1 : 0));
+                                    param['payloadlist_value'] = param.payloads.length > 0 ? param.payloads[0].uuid : "";
                                 }
                                 params_table.command_params.push(param);
                             }
@@ -201,7 +212,7 @@ var callback_table = new Vue({
                                         file_data[param_name] = document.getElementById('fileparam' + param_name).files[0];
                                         param_data[param_name] = "FILEUPLOAD";
                                         document.getElementById('fileparam' + param_name).value = "";
-                                        console.log(document.getElementById('fileparam' + param_name));
+                                        //console.log(document.getElementById('fileparam' + param_name));
                                     } else if (params_table.command_params[k]['type'] === 'PayloadList') {
                                         param_data[params_table.command_params[k]['name']] = params_table.command_params[k]['payloadlist_value'];
                                     } else if (params_table.command_params[k]['type'] === 'AgentConnect') {
@@ -235,7 +246,16 @@ var callback_table = new Vue({
 
                         } else {
                             //somebody knows what they're doing or a command just doesn't have parameters, send it off
-                            //if it is a test command we can go ahead and send it down (since it would be skipped by the above)
+                            if(this.ptype_cmd_params[this.callbacks[data['id']]['payload_type']][i]['params'].length !== 0){
+                                for (let j = 0; j < this.ptype_cmd_params[this.callbacks[data['id']]['payload_type']][i]['params'].length; j++) {
+                                    if(this.ptype_cmd_params[this.callbacks[data['id']]['payload_type']][i]['params'][j]["type"] === "File" && this.ptype_cmd_params[this.callbacks[data['id']]['payload_type']][i]['params'][j]["required"]){
+                                        alertTop("warning", "This command requires files to be uploaded through a dialog box.", 6);
+                                        this.callbacks[data['id']].input_field = command;
+                                        callback_table.task_button(this.callbacks[data['id']]);
+                                        return;
+                                    }
+                                }
+                            }
                             httpGetAsync("{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/tasks/callback/" + data['id'], post_task_callback_func, "POST",
                                 {"command": command, "params": params});
 
@@ -297,13 +317,6 @@ var callback_table = new Vue({
                 }
             }, "GET", null);
 
-        },
-        toggle_show_params: function (task) {
-            if (task.show_params) {
-                Vue.set(task, 'show_params', false);
-            } else {
-                Vue.set(task, 'show_params', true);
-            }
         },
         toggle_comment: function (task) {
             if (task.comment_visible) {
@@ -371,7 +384,8 @@ var callback_table = new Vue({
             httpGetAsync("{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/callbacks/" + $('#callback_options_select').val() + "/all_tasking", get_all_tasking_callback, "GET", null);
         },
         remove_callback: function (callback) {
-            Vue.delete(this.callbacks, callback.id);
+            this.callbacks[callback.id]['websocket'].close();
+            delete this.callbacks[callback.id];
         },
         apply_filter: function (task) {
             // determine if the specified task should be displayed based on the task_filters set
@@ -446,7 +460,7 @@ function get_all_tasking_callback(response) {
             temp['type'] = 'callback';
             Vue.nextTick().then(function () {
                 httpGetAsync("{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/payloadtypes/" + data['payload_type_id'] + "/commands", register_new_command_info, "GET", null);
-                startwebsocket_callback(data['id']);
+                callback_table.callbacks[data['id']]['websocket'] = startwebsocket_callback(data['id']);
             });
         } else {
             alertTop("danger", data['error']);
@@ -465,18 +479,13 @@ function register_new_command_info(response) {
             delete data['status'];
             data['commands'].push({"cmd": "help", "params": []});
             data['commands'].push({"cmd": "set", "params": []});
-            data['commands'].push({"cmd": "tasks", "params": []});
             data['commands'].push({"cmd": "clear", "params": []});
             callback_table.ptype_cmd_params[data['commands'][0]['payload_type']] = data['commands'];
-            let autocomplete_commands = [];
-            for (let i = 0; i < data['commands'].length; i++) {
-                autocomplete_commands.push(data['commands'][i].cmd);
-            }
             for (let id in callback_table.callbacks) {
                 if (callback_table.callbacks[id]['payload_type'] === data['commands'][0]['payload_type']) {
                     //console.log("about to set autocomplete for " + id + ":" + data['commands'][0]['payload_type']);
                     //input = document.getElementById("commandline:" + data['commands'][0]['payload_type'] + ":" + id);
-                    autocomplete(document.getElementById("commandline:" + data['commands'][0]['payload_type'] + ":" + id), autocomplete_commands);
+                    autocomplete(document.getElementById("commandline:" + data['commands'][0]['payload_type'] + ":" + id), callback_table.callbacks[id]["commands"]);
                 }
             }
         } else {
@@ -594,6 +603,8 @@ function startwebsocket_callback(cid) {
                 add_new_task(data);
             } else if (data['channel'].includes("response")) {
                 add_new_response(data, true);
+            } else if (data['channel'].includes("loadedcommand")){
+                update_loaded_commands(data);
             }
         }
     }
@@ -603,6 +614,31 @@ function startwebsocket_callback(cid) {
     ws.onerror = function (event) {
         wsonerror(event);
     };
+    return ws;
+}
+
+function update_loaded_commands(data){
+    if (!Object.prototype.hasOwnProperty.call(callback_table.callbacks[data['callback']], 'commands')) {
+        callback_table.callbacks[data['callback']]['commands'] = [];
+    }
+    if(data['channel'].includes("new")){
+        callback_table.callbacks[data['callback']]['commands'].push({"name": data['command'], "version": data["version"]});
+        callback_table.callbacks[data['callback']]['commands'].sort((a, b) => (b.name > a.name) ? -1 : ((a.name > b.name) ? 1 : 0));
+    }else if(data['channel'].includes("updated")){
+        for(let i = 0; i < callback_table.callbacks[data['callback']]['commands'].length; i++){
+            if(callback_table.callbacks[data['callback']]['commands'][i]["name"] === data["command"]){
+                callback_table.callbacks[data['callback']]['commands'][i]["version"] = data["version"];
+                return;
+            }
+        }
+    } else{
+        for(let i = 0; i < callback_table.callbacks[data['callback']]['commands'].length; i++){
+            if(callback_table.callbacks[data['callback']]['commands'][i]["name"] === data["command"]){
+                delete callback_table.callbacks[data['callback']]['commands'][i];
+                return;
+            }
+        }
+    }
 }
 
 function add_comment_callback(response) {
@@ -638,6 +674,19 @@ var params_table = new Vue({
         payloadonhost: {},
     },
     methods: {
+        restore_default_values: function(){
+            for(let i = 0; i < this.command_params.length; i ++){
+                if(this.command_params[i].type === "Array"){
+                    this.command_params[i].array_value = JSON.parse(this.command_params[i].default_value);
+                }else if(this.command_params[i].type === "String"){
+                    this.command_params[i].string_value = this.command_params[i].default_value;
+                }else if(this.command_params[i].type === "Number"){
+                    this.command_params[i].number_value = this.command_params[i].default_value;
+                }else if(this.command_params[i].type === "Boolean"){
+                    this.command_params[i].boolean_value = this.command_params[i].default_value;
+                }
+            }
+        },
         command_params_add_array_element: function (param) {
             param.array_value.push('');
         },
@@ -1082,21 +1131,21 @@ function autocomplete(inp, arr) {
         /*append the DIV element as a child of the autocomplete container:*/
         this.parentNode.appendChild(a);
         /*for each item in the array...*/
-        for (i = 0; i < arr.length; i++) {
+        for (i = 0; i < callback_table.callbacks[callback_id]["commands"].length; i++) {
             /*check if the item starts with the same letters as the text field value:*/
-            if (arr[i].toUpperCase().includes(val.toUpperCase())) {
+            if (callback_table.callbacks[callback_id]["commands"][i]["name"].toUpperCase().includes(val.toUpperCase())) {
                 /*create a DIV element for each matching element:*/
-                if (arr[i].length > longest) {
-                    longest = arr[i].length;
+                if (callback_table.callbacks[callback_id]["commands"][i]["name"].length > longest) {
+                    longest = callback_table.callbacks[callback_id]["commands"][i]["name"].length;
                 }
                 b = document.createElement("DIV");
                 /*make the matching letters bold:*/
-                let start = arr[i].toUpperCase().indexOf(val.toUpperCase());
-                b.innerHTML = arr[i].substr(0, start);
-                b.innerHTML += "<strong><span class='matching'>" + arr[i].substr(start, val.length) + "</span></strong>";
-                b.innerHTML += arr[i].substr(val.length + start);
+                let start = callback_table.callbacks[callback_id]["commands"][i]["name"].toUpperCase().indexOf(val.toUpperCase());
+                b.innerHTML = callback_table.callbacks[callback_id]["commands"][i]["name"].substr(0, start);
+                b.innerHTML += "<strong><span class='matching'>" + callback_table.callbacks[callback_id]["commands"][i]["name"].substr(start, val.length) + "</span></strong>";
+                b.innerHTML += callback_table.callbacks[callback_id]["commands"][i]["name"].substr(val.length + start);
                 /*insert a input field that will hold the current array item's value:*/
-                b.innerHTML += "<input type='hidden' value='" + arr[i] + "'>";
+                b.innerHTML += "<input type='hidden' value='" + callback_table.callbacks[callback_id]["commands"][i]["name"] + "'>";
                 /*execute a function when someone clicks on the item value (DIV element):*/
                 b.addEventListener("click", function () {
                     /*insert the value for the autocomplete text field:*/
@@ -1119,7 +1168,17 @@ function autocomplete(inp, arr) {
             try {
                 //we want to close the autocomplete menu and fill in with the top-most element
                 if (currentFocus === -1) {
-                    callback_table.callbacks[callback_id]['input_field'] = x[0].textContent;
+                    let val = "";
+                    for(let j = 0; j < x.length; j++){
+                        if(callback_table.callbacks[callback_id]['input_field'].toLowerCase() === x[j].textContent.toLowerCase()){
+                            val = x[j].textContent;
+                            break;
+                        }
+                    }
+                    if(val === ""){
+                        val = x[0].textContent;
+                    }
+                    callback_table.callbacks[callback_id]['input_field'] = val;
                 } else {
                     callback_table.callbacks[callback_id]['input_field'] = x[currentFocus].textContent;
                 }
@@ -1132,22 +1191,31 @@ function autocomplete(inp, arr) {
             //keycode UP arrow
             if (x.length > 0) {
                 currentFocus--;
-                addActive(x);
+                addActive(x, callback_id);
                 e.stopImmediatePropagation();
             }
         } else if (e.keyCode === 40 && x !== null) {
             //keycode DOWN arrow
             if (x.length > 0) {
                 currentFocus++;
-                addActive(x);
+                addActive(x, callback_id);
                 e.stopImmediatePropagation();
             }
         } else if (e.keyCode === 27 && x !== null) {
             closeAllLists();
         } else if (e.keyCode === 13 && x !== null && x.length > 0) {
             if (currentFocus === -1) {
-                //console.log(x);
-                callback_table.callbacks[callback_id]['input_field'] = x[0].textContent;
+                let val = "";
+                for(let j = 0; j < x.length; j++){
+                    if(callback_table.callbacks[callback_id]['input_field'].toLowerCase() === x[j].textContent.toLowerCase()){
+                        val = x[j].textContent;
+                        break;
+                    }
+                }
+                if(val === ""){
+                    val = x[0].textContent;
+                }
+                callback_table.callbacks[callback_id]['input_field'] = val;
                 e.preventDefault();
                 closeAllLists("");
                 e.stopImmediatePropagation();
@@ -1160,7 +1228,7 @@ function autocomplete(inp, arr) {
         }
     });
 
-    function addActive(x) {
+    function addActive(x, callback_id) {
         /*a function to classify an item as "active":*/
         if (!x) return false;
         /*start by removing the "active" class on all items:*/
@@ -1169,7 +1237,6 @@ function autocomplete(inp, arr) {
         if (currentFocus < 0) currentFocus = (x.length - 1);
         /*add class "autocomplete-active":*/
         x[currentFocus].classList.add("autocomplete-active");
-        let callback_id = this.id.split(":")[2];
         callback_table.callbacks[callback_id]['input_field'] = x[currentFocus].getElementsByTagName("input")[0].value;
     }
 
