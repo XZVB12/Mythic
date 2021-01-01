@@ -35,7 +35,7 @@ async def create_artifact(request, user):
             status_code=403,
             message="Cannot access via Cookies. Use CLI or access via JS in browser",
         )
-    if user["view_mode"] == "spectator":
+    if user["view_mode"] == "spectator" or user["current_operation"] == "":
         return json(
             {"status": "error", "error": "Spectators cannot add base artifacts"}
         )
@@ -68,7 +68,7 @@ async def update_artifact(request, user, id):
             status_code=403,
             message="Cannot access via Cookies. Use CLI or access via JS in browser",
         )
-    if user["view_mode"] == "spectator":
+    if user["view_mode"] == "spectator" or user["current_operation"] == "":
         return json(
             {"status": "error", "error": "Spectators cannot modify base artifacts"}
         )
@@ -102,7 +102,7 @@ async def delete_artifact(request, user, id):
             status_code=403,
             message="Cannot access via Cookies. Use CLI or access via JS in browser",
         )
-    if user["view_mode"] == "spectator":
+    if user["view_mode"] == "spectator" or user["current_operation"] == "":
         return json(
             {"status": "error", "error": "Spectators cannot remove base artifacts"}
         )
@@ -309,7 +309,7 @@ async def remove_artifact_tasks(request, user, aid):
             status_code=403,
             message="Cannot access via Cookies. Use CLI or access via JS in browser",
         )
-    if user["view_mode"] == "spectator":
+    if user["view_mode"] == "spectator" or user["current_operation"] == "":
         return json(
             {"status": "error", "error": "Spectators cannot remove task artifacts"}
         )
@@ -339,7 +339,7 @@ async def create_artifact_task_manually(request, user):
             status_code=403,
             message="Cannot access via Cookies. Use CLI or access via JS in browser",
         )
-    if user["view_mode"] == "spectator":
+    if user["view_mode"] == "spectator" or user["current_operation"] == "":
         return json(
             {"status": "error", "error": "Spectators cannot create task artifacts"}
         )
@@ -388,10 +388,10 @@ async def create_artifact_task_manually(request, user):
         task_artifact = await db_objects.create(
             TaskArtifact,
             task=task,
-            artifact_instance=data["artifact_instance"].encode(),
+            artifact_instance=data["artifact_instance"].encode("unicode-escape"),
             artifact=artifact,
             operation=operation,
-            host=data["host"],
+            host=data["host"].encode("unicode-escape"),
         )
         return json({"status": "success", **task_artifact.to_json()})
     except Exception as e:

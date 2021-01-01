@@ -32,6 +32,7 @@ import threading
 from time import sleep as tsleep
 import socket
 from app.api.siem_logger import log_to_siem
+import sys
 
 
 @mythic.route(mythic.config["API_BASE"] + "/callbacks/", methods=["GET"])
@@ -90,7 +91,7 @@ async def get_agent_message(request):
                 message=f"Failed to find message in body, cookies, or query args from {request.socket} as {request.method} method with headers:\n {request.headers}",
             )
         return text("", 404)
-    message, code = await parse_agent_message(data, request)
+    message, code, new_callback, msg_uuid = await parse_agent_message(data, request)
     return text(message, code)
     # return text(await parse_agent_message(data, request))
 
@@ -200,27 +201,29 @@ async def get_encryption_data(UUID):
 
 # returns a base64 encoded response message
 async def parse_agent_message(data: str, request):
+    new_callback = ""
+    agent_uuid = ""
     try:
         decoded = base64.b64decode(data)
-        #print(decoded)
+        # print(decoded)
     except Exception as e:
         await send_all_operations_message(f"Failed to base64 decode message: {str(data)}\nfrom {request.socket} as {request.method} method, URL {request.url} and with headers: \n{request.headers}",
                                           "warning")
-        return "", 404
+        return "", 404, new_callback, agent_uuid
     try:
         UUID = decoded[:36].decode()  # first 36 characters are the UUID
         # print(UUID)
     except Exception as e:
         await send_all_operations_message(f"Failed to get UUID in first 36 bytes for base64 input: {str(data)}\nfrom {request.socket} as {request.method} method, URL {request.url} with headers: \n{request.headers}",
                                           "warning")
-        return "", 404
+        return "", 404, new_callback, agent_uuid
     try:
         enc_key = await get_encryption_data(UUID)
         # print(enc_key)
     except Exception as e:
         await send_all_operations_message(f"Failed to correlate UUID to something mythic knows: {UUID}\nfrom {request.socket} as {request.method} method with headers: \n{request.headers}",
                                           "warning")
-        return "", 404
+        return "", 404, new_callback, agent_uuid
     # now we have cached_keys[UUID] is the right AES key to use with this payload, now to decrypt
     decrypted = None
     try:
@@ -238,13 +241,14 @@ async def parse_agent_message(data: str, request):
         #    decrypted = js.loads(decoded[36:])
         #print(decrypted)
     except Exception as e:
+        # print(str(e))
         if decrypted is not None:
             msg = str(decrypted)
         else:
             msg = str(decoded)
-        await send_all_operations_message(f"Failed to decrypt/load message: {str(msg)}\nfrom {request.socket} as {request.method} method with URL {request.url} with headers: \n{request.headers}",
+        await send_all_operations_message(f"Failed to decrypt/load message with error: {str(e)}\n {str(msg)}\nfrom {request.socket} as {request.method} method with URL {request.url} with headers: \n{request.headers}",
                                           "warning")
-        return "", 404
+        return "", 404, new_callback, agent_uuid
     """
     JSON({
         "action": "", //staging-rsa, staging-dh, staging-psk, get_tasking ...
@@ -256,29 +260,34 @@ async def parse_agent_message(data: str, request):
     })
     """
     try:
+
         if "action" not in decrypted:
             await send_all_operations_message("Missing 'action' in parsed JSON", "warning")
-            return "", 404
+            return "", 404, new_callback, agent_uuid
         # now to parse out what we're doing, everything is decrypted at this point
         # shuttle everything out to the appropriate api files for processing
-        if keep_logs:
-            logger.info("Agent -> Mythic: " + js.dumps(decrypted))
+        #if keep_logs:
+        #    logger.info("Agent -> Mythic: " + js.dumps(decrypted))
         # print(decrypted)
         response_data = {}
         if decrypted["action"] == "get_tasking":
             query = await db_model.callback_query()
             callback = await db_objects.get(query, agent_callback_id=UUID)
             response_data = await get_agent_tasks(decrypted, callback)
-            delegates = await get_routable_messages(callback, callback.operation)
+            delegates = await get_routable_messages(callback)
             if delegates is not None:
                 response_data["delegates"] = delegates
+            agent_uuid = UUID
         elif decrypted["action"] == "post_response":
             response_data = await post_agent_response(decrypted, UUID)
+            agent_uuid = UUID
         elif decrypted["action"] == "upload":
             response_data = await download_agent_file(decrypted, UUID)
+            agent_uuid = UUID
         elif decrypted["action"] == "delegate":
             # this is an agent message that is just requesting or forwarding along delegate messages
             # this is common in server_routed traffic after the first hop in the mesh
+            agent_uuid = UUID
             pass
         elif decrypted["action"] == "checkin":
             if cached_keys[UUID]["type"] is not None:
@@ -303,6 +312,8 @@ async def parse_agent_message(data: str, request):
                 ):
                     decrypted["encryption_type"] = "AES256"
             response_data = await create_callback_func(decrypted, request)
+            if response_data["status"] == "success":
+                new_callback = response_data["id"]
         elif decrypted["action"] == "staging_rsa":
             response_data, staging_info = await staging_rsa(decrypted, UUID)
             if staging_info is not None:
@@ -312,7 +323,7 @@ async def parse_agent_message(data: str, request):
                     "type": "AES256",
                 }
             else:
-                return "", 404
+                return "", 404, new_callback, agent_uuid
             # staging is it's own thing, so return here instead of following down
         elif decrypted["action"] == "staging_dh":
             response_data, staging_info = await staging_dh(decrypted, UUID)
@@ -323,12 +334,13 @@ async def parse_agent_message(data: str, request):
                     "type": "AES256",
                 }
             else:
-                return "", 404
+                return "", 404, new_callback, agent_uuid
         elif decrypted["action"] == "update_info":
             response_data = await update_callback(decrypted, UUID)
+            agent_uuid = UUID
         else:
             await send_all_operations_message("Unknown action:" + str(decrypted["action"]), "warning")
-            return "", 404
+            return "", 404, new_callback, agent_uuid
         # now that we have the right response data, format the response message
         if (
             "delegates" in decrypted
@@ -340,16 +352,32 @@ async def parse_agent_message(data: str, request):
                 response_data["delegates"] = []
             for d in decrypted["delegates"]:
                 # handle messages for all of the delegates
+                # d is {"UUID1": agentMessage}
                 for d_uuid in d:
                     # process the delegate message recursively
-                    del_message, status = await parse_agent_message(d[d_uuid], request)
+                    # iterate over the keys in d, typically just one
+                    del_message, status, del_new_callback, del_uuid = await parse_agent_message(d[d_uuid], request)
                     if status == 200:
                         # store the response to send back
-                        response_data["delegates"].append({d_uuid: del_message})
+                        if del_new_callback != "":
+                            # the delegate message caused a new callback, to report the changing UUID
+                            response_data["delegates"].append({del_new_callback: del_message,
+                                                               d_uuid: del_new_callback})
+                        elif del_uuid != "" and del_uuid != d_uuid:
+                            # there is no new callback
+                            # the delegate is a callback (not staging) and the callback uuid != uuid in the message
+                            # so send an update message with the rightful callback uuid so the agent can update
+                            response_data["delegates"].append({del_uuid: del_message,
+                                                               d_uuid: del_uuid})
+                        else:
+                            # there's no new callback and the delegate message isn't a full callback yet
+                            # so just proxy through the UUID since it's in some form of staging
+                            response_data["delegates"].append({d_uuid: del_message})
         #   special encryption will be handled by the appropriate stager call
         # base64 ( UID + ENC(response_data) )
-        if keep_logs:
-            logger.info("Mythic -> Agent: " + js.dumps(response_data))
+        #if keep_logs:
+        #    logger.info("Mythic -> Agent: " + js.dumps(response_data))
+        # print(response_data)
         final_msg = await crypt.encrypt_message(response_data, enc_key, UUID)
         #if enc_key["type"] is None:
         #    return (
@@ -362,11 +390,13 @@ async def parse_agent_message(data: str, request):
         #            data=js.dumps(response_data).encode(), key=enc_key["enc_key"]
         #        )
         #        return base64.b64encode(UUID.encode() + enc_data).decode(), 200
-        return final_msg, 200
+        return final_msg, 200, new_callback, agent_uuid
     except Exception as e:
+        print(sys.exc_info()[-1].tb_lineno)
+        print("callback.py: " + str(e))
         await send_all_operations_message(f"Exception dealing with message: {str(decoded)}\nfrom {request.host} as {request.method} method with headers: \n{request.headers}",
                                           "warning")
-        return "", 404
+        return "", 404, new_callback, agent_uuid
 
 
 @mythic.route(mythic.config["API_BASE"] + "/callbacks/", methods=["POST"])
@@ -380,7 +410,7 @@ async def create_manual_callback(request, user):
             status_code=403,
             message="Cannot access via Cookies. Use CLI or access via JS in browser",
         )
-    if user["view_mode"] == "spectator":
+    if user["view_mode"] == "spectator" or user["current_operation"] == "":
         return json(
             {"status": "error", "error": "Spectators cannot create manual callbacks"}
         )
@@ -732,7 +762,7 @@ async def update_callback(data, UUID):
 current_graphs = {}
 
 
-async def get_routable_messages(requester, operation):
+async def get_routable_messages(requester):
     # are there any messages sitting in the database in the "submitted" stage that have routes from the requester
     # 1. get all CallbackGraphEdge entries that have an end_timestamp of Null (they're still active)
     # 2. feed into dijkstar and do shortest path
@@ -740,6 +770,7 @@ async def get_routable_messages(requester, operation):
     # 4.   if there's tasking, wrap it up in a message:
     #        content is the same of that of a "get_tasking" reply with a a -1 request
     delegates = []
+    operation = requester.operation
     if operation.name not in current_graphs:
         await update_graphs(operation)
     if current_graphs[operation.name].edge_count == 0:
@@ -967,7 +998,7 @@ async def remove_graph_edge(request, id, user):
             status_code=403,
             message="Cannot access via Cookies. Use CLI or access via JS in browser",
         )
-    if user["view_mode"] == "spectator":
+    if user["view_mode"] == "spectator" or user["current_operation"] == "":
         return json(
             {"status": "error", "error": "Spectators cannot remove graph edges"}
         )
@@ -1144,17 +1175,17 @@ async def send_socks_data(data, callback: Callback):
         for d in data:
             if callback.id in cached_socks:
                 msg = js.dumps(d).encode()
-                print("******* SENDING DATA BACK TO PROXYCHAINS *****")
-                print(msg)
+                #print("******* SENDING DATA BACK TO PROXYCHAINS *****")
+                #print(msg)
                 msg = int.to_bytes(len(msg), 4, "big") + msg
                 total_msg += msg
                 # cached_socks[callback.id]['socket'].sendall(int.to_bytes(len(msg), 4, "big"))
-            else:
-                print("****** NO CACHED SOCKS, MUST BE CLOSED *******")
+            #else:
+                #print("****** NO CACHED SOCKS, MUST BE CLOSED *******")
         cached_socks[callback.id]["socket"].sendall(total_msg)
         return {"status": "success"}
     except Exception as e:
-        print("******** EXCEPTION IN SEND SOCKS DATA *****\n{}".format(str(e)))
+        #print("******** EXCEPTION IN SEND SOCKS DATA *****\n{}".format(str(e)))
         return {"status": "error", "error": str(e)}
 
 
@@ -1168,9 +1199,9 @@ async def get_socks_data(callback: Callback):
                     #print("Just got socks data to give to agent")
                 except:
                     break
-    if len(data) > 0:
-        print("******* SENDING THE FOLLOWING TO THE AGENT ******")
-        print(data)
+    #if len(data) > 0:
+        #print("******* SENDING THE FOLLOWING TO THE AGENT ******")
+        #print(data)
     return data
 
 
@@ -1197,27 +1228,12 @@ def thread_read_socks(port: int, callback_id: int) -> None:
             elif len(size) == 0:
                 tsleep(1)
                 continue
-            else:
-                print(
-                    "############# only got {} bytes ############".format(
-                        str(len(size))
-                    )
-                )
             # print("now trying to read in: {} bytes".format(str(size)))
             msg = sock.recv(size)
-            if len(msg) < size:
-                print("########### didn't read the full size ########")
-            # print("got socks data from user")
             try:
                 cached_socks[callback_id]["queue"].append(js.loads(msg.decode()))
-                print("just read from proxychains and added to queue for agent to pick up")
+                #print("just read from proxychains and added to queue for agent to pick up")
             except Exception as d:
-                print(
-                    "*" * 10
-                    + "Got exception from appending data to cached_socks"
-                    + "*" * 10
-                )
-                print(d)
                 if callback_id not in cached_socks:
                     #print("*" * 10 + "Got closing socket" + "*" * 10)
                     sock.close()
@@ -1314,7 +1330,7 @@ async def update_callback_web(request, id, user):
             status_code=403,
             message="Cannot access via Cookies. Use CLI or access via JS in browser",
         )
-    if user["view_mode"] == "spectator":
+    if user["view_mode"] == "spectator" or user["current_operation"] == "":
         return json({"status": "error", "error": "Spectators cannot update callbacks"})
     data = request.json
     try:
@@ -1467,7 +1483,7 @@ async def remove_callback(request, id, user):
             status_code=403,
             message="Cannot access via Cookies. Use CLI or access via JS in browser",
         )
-    if user["view_mode"] == "spectator":
+    if user["view_mode"] == "spectator" or user["current_operation"] == "":
         return json(
             {"status": "error", "error": "Spectators cannot make callbacks inactive"}
         )
@@ -1536,7 +1552,7 @@ async def get_callback_keys(request, user, id):
             status_code=403,
             message="Cannot access via Cookies. Use CLI or access via JS in browser",
         )
-    if user["view_mode"] == "spectator":
+    if user["view_mode"] == "spectator" or user["current_operation"] == "":
         return json({"status": "error", "error": "Spectators cannot get callback keys"})
     try:
         query = await db_model.operation_query()
@@ -1905,14 +1921,14 @@ async def path_to_callback(callback):
     try:
         await update_non_directed_graphs(callback.operation)
         if current_non_directed_graphs[callback.operation.name].edge_count == 0:
-            print("no edges")
+            #print("no edges")
             return []  # graph for this operation has no edges
         try:
             path = find_path(
                 current_non_directed_graphs[callback.operation.name], callback, "Mythic"
             )
         except NoPathError:
-            print("no path")
+            #print("no path")
             return []
         return path.nodes
     except Exception as e:

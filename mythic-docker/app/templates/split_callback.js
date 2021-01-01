@@ -26,7 +26,8 @@ var callback_table = new Vue({
         task_filters: {
             "task": {"active": false, "range_low": 0, "range_high": 1000000},
             "operator": {"active": false, "username": ""},
-            "command": {"active": false, "cmd": ""}
+            "command": {"active": false, "cmd": ""},
+            "comment": {"active": false}
         }
     },
     methods: {
@@ -126,7 +127,9 @@ var callback_table = new Vue({
                                     param.choice_value = param.choices.split("\n")[0];
                                 }
                                 if(param.type === "Array"){
-                                    param.array_value = JSON.parse(param.default_value);
+                                    if(param.default_value.length > 0){
+                                        param.array_value = JSON.parse(param.default_value);
+                                    }
                                 }else if(param.type === "String"){
                                     param.string_value = param.default_value;
                                 }else if(param.type === "Number"){
@@ -390,14 +393,21 @@ var callback_table = new Vue({
         apply_filter: function (task) {
             // determine if the specified task should be displayed based on the task_filters set
             let status = true;
-            if (this.task_filters['task']['active'] && task.id !== undefined) {
+            if (this.task_filters['task']['active'] && task.id !== null) {
                 status = status && task.id <= this.task_filters['task']['range_high'] && task.id >= this.task_filters['task']['range_low'];
             }
-            if (this.task_filters['operator']['active'] && task.operator !== undefined) {
+            if (this.task_filters['operator']['active'] && task.operator !== null) {
                 status = status && task.operator.includes(this.task_filters['operator']['username']);
             }
-            if (this.task_filters['command']['active'] && task.command !== undefined) {
-                status = status && task.command.includes(this.task_filters['command']['cmd']);
+            if (this.task_filters['command']['active']) {
+                if (task.command === null) {
+                    status = status && task.original_params.includes(this.task_filters['command']['cmd']);
+                } else {
+                    status = status && task.command.includes(this.task_filters['command']['cmd']);
+                }
+            }
+            if (this.task_filters['comment']['active']){
+                status = status && task.comment !== "";
             }
             // if nothing is active, default to true
             return status;
@@ -677,7 +687,13 @@ var params_table = new Vue({
         restore_default_values: function(){
             for(let i = 0; i < this.command_params.length; i ++){
                 if(this.command_params[i].type === "Array"){
-                    this.command_params[i].array_value = JSON.parse(this.command_params[i].default_value);
+                    if(this.command_params[i].default_value.length > 0){
+                        this.command_params[i].array_value = JSON.parse(this.command_params[i].default_value);
+                    }
+                    else{
+                        this.command_params[i].array_value = [];
+                    }
+
                 }else if(this.command_params[i].type === "String"){
                     this.command_params[i].string_value = this.command_params[i].default_value;
                 }else if(this.command_params[i].type === "Number"){

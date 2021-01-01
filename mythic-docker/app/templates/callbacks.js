@@ -1466,12 +1466,15 @@ function view_callback_info(response) {
                         min.push({"component": "Mythic", "value": "Mythic"});
                         continue
                     }
-                    let info = JSON.parse(data['path'][i]);
-                    if ("name" in info) {
-                        min.push({"component": "C2 Profile", "value": info.name});
-                    } else {
-                        min.push({"component": "Callback", "value": info.id});
+                    if(data['path'][i].length > 0){
+                        let info = JSON.parse(data['path'][i]);
+                        if ("name" in info) {
+                            min.push({"component": "C2 Profile", "value": info.name});
+                        } else {
+                            min.push({"component": "Callback", "value": info.id});
+                        }
                     }
+
                 }
                 data['path'] = min;
             }
@@ -1486,6 +1489,8 @@ function view_callback_info(response) {
             alertTop("danger", data['error']);
         }
     } catch (error) {
+        console.log(response);
+        console.log(error.toString());
         alertTop("danger", "session expired, refresh please");
     }
 }
@@ -1532,7 +1537,8 @@ var task_data = new Vue({
         task_filters: {
             "task": {"active": false, "range_low": 0, "range_high": 1000000},
             "operator": {"active": false, "username": ""},
-            "command": {"active": false, "cmd": ""}
+            "command": {"active": false, "cmd": ""},
+            "comment": {"active": false}
         },
         input_field_placeholder: {"data": "", "cid": -1},
         meta: meta,
@@ -1627,6 +1633,7 @@ var task_data = new Vue({
                                             last_vals = JSON.parse(meta[data['cid']]['history'][j]['params']);
                                         } catch (error) {
                                             console.log(error.toString());
+                                            console.log("error in parsing last_vals");
                                             last_vals = {};
                                         }
                                         break;
@@ -1660,7 +1667,9 @@ var task_data = new Vue({
                                     param.choice_value = param.choices.split("\n")[0];
                                 }
                                 if(param.type === "Array"){
-                                    param.array_value = JSON.parse(param.default_value);
+                                    if(param.default_value.length > 0){
+                                        param.array_value = JSON.parse(param.default_value);
+                                    }
                                 }else if(param.type === "String"){
                                     param.string_value = param.default_value;
                                 }else if(param.type === "Number"){
@@ -1841,9 +1850,11 @@ var task_data = new Vue({
                                         if (params_table.command_params[k]['payloads'][params_table.command_params[k]['agentconnect_payload']]['type'] === 'payload') {
                                             //param_data[params_table.command_params[k]['name']]['agent_uuid'] = params_table.payloadonhost[params_table.command_params[k]['agentconnect_host']][params_table.command_params[k]['agentconnect_payload']]['payload']['uuid'];
                                             param_data[params_table.command_params[k]['name']]['agent_uuid'] = params_table.command_params[k]['payloads'][params_table.command_params[k]['agentconnect_payload']]['payload']['uuid'];
+                                            param_data[params_table.command_params[k]['name']]['callback_uuid'] = "";
                                         } else {
                                             //param_data[params_table.command_params[k]['name']]['agent_uuid'] = params_table.payloadonhost[params_table.command_params[k]['agentconnect_host']][params_table.command_params[k]['agentconnect_payload']]['agent_callback_id'];
-                                            param_data[params_table.command_params[k]['name']]['agent_uuid'] = params_table.command_params[k]['payloads'][params_table.command_params[k]['agentconnect_payload']]['agent_callback_id'];
+                                            param_data[params_table.command_params[k]['name']]['callback_uuid'] = params_table.command_params[k]['payloads'][params_table.command_params[k]['agentconnect_payload']]['agent_callback_id'];
+                                            param_data[params_table.command_params[k]['name']]['agent_uuid'] = params_table.command_params[k]['payloads'][params_table.command_params[k]['agentconnect_payload']]['registered_payload'];
                                         }
                                         if (params_table.command_params[k]['agentconnect_c2profile'] === -1) {
                                             // they didn't select a specific c2 profile, so send the list
@@ -1941,6 +1952,8 @@ var task_data = new Vue({
             });
             $('#cardbody' + task.id).unbind('hidden.bs.collapse').on('hidden.bs.collapse', function () {
                 all_tasks[task.callback][task.id]['expanded'] = false;
+                Vue.set(all_tasks[task.callback][task.id], "response", {});
+                Vue.set(all_tasks[task.callback][task.id], "scripted", "");
                 $('#color-arrow' + task.id).removeClass('fa-minus').addClass('fa-plus');
             });
         },
@@ -2256,18 +2269,21 @@ var task_data = new Vue({
         apply_filter: function (task) {
             // determine if the specified task should be displayed based on the task_filters set
             let status = true;
-            if (this.task_filters['task']['active'] && task.id !== undefined) {
+            if (this.task_filters['task']['active'] && task.id !== null) {
                 status = status && task.id <= this.task_filters['task']['range_high'] && task.id >= this.task_filters['task']['range_low'];
             }
-            if (this.task_filters['operator']['active'] && task.operator !== undefined) {
+            if (this.task_filters['operator']['active'] && task.operator !== null) {
                 status = status && task.operator.includes(this.task_filters['operator']['username']);
             }
             if (this.task_filters['command']['active']) {
-                if (task.command === undefined) {
-                    status = status && task.params.includes(this.task_filters['command']['cmd']);
+                if (task.command === null) {
+                    status = status && task.original_params.includes(this.task_filters['command']['cmd']);
                 } else {
                     status = status && task.command.includes(this.task_filters['command']['cmd']);
                 }
+            }
+            if (this.task_filters['comment']['active']){
+                status = status && task.comment !== "";
             }
             // if nothing is active, default to true
             return status;
@@ -2289,7 +2305,7 @@ var task_data = new Vue({
                 task_data.path = "/";
             } else if (data['parent_path'] === undefined || data['parent_path'] === "") {
                 data['parent_path'] = "";
-                task_data.path = "";
+                task_data.path = data['name'];
             } else if (data['parent_path'][0] === "/") {
                 if (data['parent_path'] === "/") {
                     task_data.path = data['parent_path'] + data['name'];
@@ -2297,9 +2313,14 @@ var task_data = new Vue({
                     task_data.path = data['parent_path'] + "/" + data['name'];
                 }
             } else {
-                task_data.path = data['parent_path'] + "\\" + data['name'];
+                if(data['parent_path'][data['parent_path'].length -1] === "\\"){
+                    task_data.path = data['parent_path'] + data['name'];
+                }else{
+                    task_data.path = data['parent_path'] + "\\" + data['name'];
+                }
+
             }
-            task_data.folder = {"data": data, "children": children};
+            Vue.set(task_data, "folder", {"data": data, "children": children});
         },
         update_file_browser_comment_live: function (data) {
             httpGetAsync("{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/filebrowserobj/" + data.id, (response) => {
@@ -2485,8 +2506,6 @@ var task_data = new Vue({
             } else {
                 if(data.data.is_file){
                     alertTop("info", "Cannot view children of files, only folders.");
-                }else{
-                    alertTop("info", "Children of folder unknown.");
                 }
             }
         }
@@ -2600,7 +2619,10 @@ Vue.component('browser-menu', {
         '      <span v-for="n in depth" style="color:gray">&nbsp;&nbsp;|&nbsp;</span>' +
         '        <template> <i :class="iconClasses" @click="toggleChildren" ></i>\n' +
         "             <span  @click='test' class='browser-name' :style='data.deleted ? \"text-decoration:line-through\" : \"\" '> [[ data.name ]] </span>" +
-        '                     <template v-if="data.success === true">' +
+        '              <template v-if="data.loading === true">' +
+        '                     <div class="spinner-border text-info" style="width:1rem;height:1rem"  role="status"> </div> fetching...' +
+        '                </template>' +
+        '              <template v-else-if="data.success === true">' +
         '                     <i style="color:green" class="fas fa-check"></i>' +
         '                </template>' +
         '               <template v-else-if="data.success === false">' +
@@ -2641,7 +2663,7 @@ Vue.component('browser-menu', {
         },
         labelClasses() {
             let cls = "";
-            if (this.children !== undefined) {
+            if (!this.data.is_file) {
                 cls += ' has-children ';
             }
             return cls;
@@ -2660,14 +2682,59 @@ Vue.component('browser-menu', {
                 task_data.$forceUpdate();
                 return;
             }
-            if(this.children !== undefined){
+            if(this.depth === 0){
+                this.$forceUpdate();
                 task_data.setBrowserTableData(this.data, this.children);
-                this.$forceUpdate();
-            }else{
-                alertTop("info", "Children of folder unknown, showing parent folder instead.");
-                task_data.setBrowserTableData(this.$parent.data, this.$parent.children);
-                this.$forceUpdate();
+                task_data.$forceUpdate();
+                return;
             }
+            let me = this;
+            me.data.loading = true;
+            me.$forceUpdate();
+            httpGetAsync("{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/filebrowserobj/" + this.data.id + "/files", (response) => {
+                    try {
+                        let info = JSON.parse(response);
+                        if (info["status"] === "success") {
+                            setTimeout(() => {
+                                Vue.nextTick().then(function () {
+                                    if(me.children === undefined){
+                                        me.children = [];
+                                    }
+                                    for(let i = 0; i < info["files"].length; i++){
+                                        let found = false;
+                                        for(let j = 0; j < me.children.length; j++){
+                                            if(Object.values(me.children[j])[0].data.id === Object.values(info["files"][i])[0].data.id){
+                                                found = true;
+                                                break;
+                                            }
+                                        }
+                                        if(!found){
+                                            me.children.push(info["files"][i]);
+                                        }
+                                    }
+                                    task_data.setBrowserTableData(me.data, me.children);
+                                    setTimeout(() => { // setTimeout to put this into event queue
+                                        // executed after render
+                                        Vue.nextTick().then(function () {
+                                            me.data.loading = false;
+                                            me.$forceUpdate();
+                                        });
+                                    }, 0);
+                                });
+                            });
+                        } else {
+                            alertTop("danger", info["error"]);
+                            me.data.loading = false;
+                            me.$forceUpdate();
+                        }
+                    } catch (error) {
+                        me.data.loading = false;
+                        console.log(error.toString());
+                        me.$forceUpdate();
+                        alertTop("danger", "error fetching files in that folder.");
+                    }
+                },
+                "GET", null);
         },
         get_latest_download_path() {
             return "{{http}}://{{links.server_ip}}:{{links.server_port}}{{links.api_base}}/files/download/" + this.data['files'][0]['agent_file_id'];
@@ -2745,7 +2812,12 @@ var params_table = new Vue({
         restore_default_values: function(){
             for(let i = 0; i < this.command_params.length; i ++){
                 if(this.command_params[i].type === "Array"){
-                    this.command_params[i].array_value = JSON.parse(this.command_params[i].default_value);
+                    if(this.command_params[i].default_value.length > 0){
+                        this.command_params[i].array_value = JSON.parse(this.command_params[i].default_value);
+                    }
+                    else{
+                        this.command_params[i].array_value = [];
+                    }
                 }else if(this.command_params[i].type === "String"){
                     this.command_params[i].string_value = this.command_params[i].default_value;
                 }else if(this.command_params[i].type === "Number"){
@@ -3282,7 +3354,7 @@ function add_new_response(rsp, from_websocket) {
             all_tasks[rsp['task']['callback']][rsp['task']['id']]['expanded'] = true;
             //now that the new response has been added, potentially update the scripted version
             if (Object.prototype.hasOwnProperty.call(browser_scripts, rsp['task']['command_id']) && all_tasks[rsp['task']['callback']][rsp['task']['id']]['use_scripted']) {
-                all_tasks[rsp['task']['callback']][rsp['task']['id']]['scripted'] = browser_scripts[rsp['task']['command_id']](rsp['task'], Object.values(all_tasks[rsp['task']['callback']][rsp['task']['id']]['response']));
+                Vue.set(all_tasks[rsp['task']['callback']][rsp['task']['id']], 'scripted', browser_scripts[rsp['task']['command_id']](rsp['task'], Object.values(all_tasks[rsp['task']['callback']][rsp['task']['id']]['response'])));
             }
             if (from_websocket) {
                 //we want to make sure we have this expanded by default
@@ -4025,45 +4097,15 @@ function startwebsocket_filebrowser() {
         } else if (event.data !== "") {
             let data = JSON.parse(event.data);
             if (!initial_group_done) {
-                Vue.set(meta, "file_browser", data);
+                for(const [key, value] of Object.entries(data)){
+                    for(let i = 0; i < value.length; i++){
+                        process_file_browser_data(value[i]);
+                    }
+                }
+                initial_group_done = true;
             } else {
                 // now we have streaming updates and need to merge them in
-                // first step is to find the right host
-                if (data['host'] === undefined || data['host'].length === 0) {
-                    return
-                }
-                if (!Object.prototype.hasOwnProperty.call(meta['file_browser'], data['host'])) {
-                    Vue.set(meta["file_browser"], data["host"], {
-                        "data": {
-                            "name": data['host'],
-                            "host": data['host']
-                        }, "children": []
-                    });
-                }
-                // what if we're adding a new top level root
-                if (data['parent'] === null) {
-                    for (let i = 0; i < meta['file_browser'][data['host']]['children'].length; i++) {
-                        if (data['name'] in meta['file_browser'][data['host']]['children'][i]) {
-                            Object.assign(meta['file_browser'][data['host']]['children'][i][data['name']]['data'],
-                                meta['file_browser'][data['host']]['children'][i]['data'],
-                                data);
-                            task_data.$forceUpdate();
-                            return;
-                        }
-                    }
-                    // if we get here, we have a root element that's new, so add it
-                    let new_data = {};
-                    new_data[data['name']] = {"data": data, "children": []};
-                    meta['file_browser'][data['host']]['children'].push(new_data);
-                    task_data.$forceUpdate();
-                } else {
-                    add_update_file_browser(data, meta['file_browser'][data['host']]);
-                    task_data.$forceUpdate();
-                }
-                setTimeout(() => { // setTimeout to put this into event queue
-                    // executed after render
-                    task_data.$forceUpdate();
-                }, 0);
+                process_file_browser_data(data);
             }
         } else {
             initial_group_done = true;
@@ -4077,6 +4119,44 @@ function startwebsocket_filebrowser() {
     };
 }
 
+function process_file_browser_data(data){
+    // first step is to find the right host
+    if (data['host'] === undefined || data['host'].length === 0) {
+        return
+    }
+    if (!Object.prototype.hasOwnProperty.call(meta['file_browser'], data['host'])) {
+        Vue.set(meta["file_browser"], data["host"], {
+            "data": {
+                "name": data['host'],
+                "host": data['host']
+            }, "children": []
+        });
+    }
+    // what if we're adding a new top level root
+    if (data['parent'] === null) {
+        for (let i = 0; i < meta['file_browser'][data['host']]['children'].length; i++) {
+            if (data['name'] in meta['file_browser'][data['host']]['children'][i]) {
+                Object.assign(meta['file_browser'][data['host']]['children'][i][data['name']]['data'],
+                    meta['file_browser'][data['host']]['children'][i]['data'],
+                    data);
+                task_data.$forceUpdate();
+                return;
+            }
+        }
+        // if we get here, we have a root element that's new, so add it
+        let new_data = {};
+        new_data[data['name']] = {"data": data, "children": []};
+        meta['file_browser'][data['host']]['children'].push(new_data);
+        task_data.$forceUpdate();
+    } else {
+        add_update_file_browser(data, meta['file_browser'][data['host']]);
+        task_data.$forceUpdate();
+    }
+    setTimeout(() => { // setTimeout to put this into event queue
+        // executed after render
+        task_data.$forceUpdate();
+    }, 0);
+}
 
 
 function add_update_file_browser(search, element) {
@@ -4104,7 +4184,7 @@ function add_update_file_browser(search, element) {
     //if we get here, and parent is true, then we are the parent and failed to find the child, so we need to add it
     if (element['data']['id'] === search['parent']) {
         let new_data = {};
-        new_data[search['name']] = {"data": search, "children": undefined};
+        new_data[search['name']] = {"data": search, "children": []};
         if(element['children'] === undefined){
             Vue.set(element, "children", []);
         }

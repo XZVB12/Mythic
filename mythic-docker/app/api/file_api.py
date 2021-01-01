@@ -316,6 +316,7 @@ async def create_filemeta_in_database_func(data):
         operation = task.callback.operation
     except Exception as e:
         print("{} {}".format(str(sys.exc_info()[-1].tb_lineno), str(e)))
+        print("file_api.py")
         return {"status": "error", "error": "failed to find task"}
     try:
         if "full_path" in data and data["full_path"] != "":
@@ -387,6 +388,7 @@ async def create_filemeta_in_database_func(data):
             await log_to_siem(task.to_json(), mythic_object="file_screenshot")
     except Exception as e:
         print("{} {}".format(str(sys.exc_info()[-1].tb_lineno), str(e)))
+        print("file_api.py")
         return {"status": "error", "error": "failed to create file"}
     status = {"status": "success"}
     return {**status, **filemeta.to_json()}
@@ -442,6 +444,7 @@ async def create_filemeta_in_database_manual(request, user):
         delete_after_fetch=False,
         filename=filename,
     )
+    os.makedirs("./app/files/", exist_ok=True)
     path = "./app/files/{}".format(file_meta.agent_file_id)
     code_file = open(path, "wb")
     code_file.write(code)
@@ -599,8 +602,11 @@ async def get_screencapture(request, user, id):
     except Exception as e:
         print("error in get_screencapture: " + str(e))
         return json({"status": "error", "error": "failed to find callback"})
-    if file_meta.operation.name in user["operations"]:
-        return await file(file_meta.path, filename=file_meta.filename)
+    try:
+        if file_meta.operation.name in user["operations"]:
+            return await file(file_meta.path, filename=file_meta.filename)
+    except Exception as e:
+        return json({"status": "error", "error": "failed to read screenshot from disk"})
     else:
         return json(
             {

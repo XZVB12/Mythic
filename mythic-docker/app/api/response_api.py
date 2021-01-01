@@ -25,6 +25,7 @@ from sanic.log import logger
 from peewee import fn
 from app.api.siem_logger import log_to_siem
 from app.api.file_browser_api import add_upload_file_to_file_browser
+import asyncio
 
 
 # This gets all responses in the database
@@ -299,12 +300,9 @@ async def post_agent_response(agent_message, UUID):
                             from app.api.file_browser_api import (
                                 store_response_into_filebrowserobj,
                             )
-                            status = await store_response_into_filebrowserobj(
+                            asyncio.create_task(store_response_into_filebrowserobj(
                                 task.callback.operation, task, parsed_response["file_browser"]
-                            )
-                            if status["status"] == "error":
-                                json_return_info["status"] = "error"
-                                json_return_info["error"] = json_return_info["error"] + " " + status["error"] if "error" in json_return_info else status["error"]
+                            ))
                         parsed_response.pop("file_browser", None)
                     if "removed_files" in parsed_response:
                         # an agent is reporting back that a file was removed from disk successfully
@@ -399,7 +397,7 @@ async def post_agent_response(agent_message, UUID):
                                 Keylog,
                                 task=task,
                                 window=parsed_response["window_title"],
-                                keystrokes=parsed_response["keystrokes"],
+                                keystrokes=parsed_response["keystrokes"].encode("unicode-escape"),
                                 operation=task.callback.operation,
                                 user=parsed_response["user"],
                             )
@@ -433,23 +431,23 @@ async def post_agent_response(agent_message, UUID):
                                     try:
                                         query = await db_model.artifact_query()
                                         base_artifact = await db_objects.get(
-                                            query, name=artifact["base_artifact"].encode()
+                                            query, name=artifact["base_artifact"].encode("unicode-escape")
                                         )
                                     except Exception as e:
                                         base_artifact = await db_objects.create(
                                             Artifact,
-                                            name=artifact["base_artifact"].encode(),
+                                            name=artifact["base_artifact"].encode("unicode-escape"),
                                             description="Auto created from task {}".format(
                                                 task.id
-                                            ).encode(),
+                                            ).encode("unicode-escape"),
                                         )
                                     # you can report back multiple artifacts at once, no reason to make separate C2 requests
                                     art = await db_objects.create(
                                         TaskArtifact,
                                         task=task,
-                                        artifact_instance=str(artifact["artifact"]).encode(),
+                                        artifact_instance=str(artifact["artifact"]).encode("unicode-escape"),
                                         artifact=base_artifact,
-                                        host=task.callback.host,
+                                        host=task.callback.host.encode("unicode-escape"),
                                     )
                                     await log_to_siem(art.to_json(), mythic_object="artifact_new")
                                     # final_output += "\nAdded artifact {}".format(str(artifact['artifact']))
@@ -497,7 +495,7 @@ async def post_agent_response(agent_message, UUID):
                                     chunks_received=file_meta.chunks_received,
                                     chunk_size=file_meta.chunk_size,
                                     complete=file_meta.complete,
-                                    path=file_meta.path,
+                                    path=file_meta.path.encode("unicode-escape"),
                                     full_remote_path=parsed_response["full_path"].encode("unicode-escape"),
                                     operation=task.callback.operation,
                                     md5=file_meta.md5,
@@ -513,19 +511,20 @@ async def post_agent_response(agent_message, UUID):
                                 ):
                                     file_meta.full_remote_path = parsed_response[
                                         "full_path"
-                                    ]
+                                    ].encode("unicode-escape")
                                 else:
                                     file_meta.full_remote_path = (
                                         file_meta.full_remote_path
                                         + ","
                                         + parsed_response["full_path"]
-                                    )
+                                    ).encode("unicode-escape")
                                 if host != file_meta.host:
                                     file_meta.host = host.encode("unicode-escape")
                                 await db_objects.update(file_meta)
-                                await add_upload_file_to_file_browser(task.callback.operation, task, file_meta,
-                                                                      {"host": host,
-                                                                       "full_path": parsed_response["full_path"]})
+                                if file_meta.full_remote_path != "":
+                                    await add_upload_file_to_file_browser(task.callback.operation, task, file_meta,
+                                                                          {"host": host,
+                                                                           "full_path": parsed_response["full_path"]})
                         except Exception as e:
                             print(str(e))
                             logger.exception(
@@ -550,7 +549,7 @@ async def post_agent_response(agent_message, UUID):
                                 json_return_info["error"] = json_return_info["error"] + " " + str(e) if "error" in json_return_info else str(e)
                         parsed_response.pop("edges", None)
                     if "commands" in parsed_response:
-                        if parsed_response["commands"] != [] and parsed_response["commands"] is not None:
+                        if parsed_response["commands"] != [] and parsed_response["commands"] is not None and parsed_response["commands"] != "":
                             # the agent is reporting back that it has commands that are loaded/unloaded
                             from app.api.callback_api import load_commands_func
                             for c in parsed_response["commands"]:
